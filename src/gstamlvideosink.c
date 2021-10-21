@@ -6,6 +6,7 @@
 #include "render_lib.h"
 #include <stdbool.h>`
 #include <gst/gstdrmbufferpool.h>
+#include <gst/allocators/gstdmabuf.h>
 
 /* signals */
 enum
@@ -33,8 +34,8 @@ enum
 
 struct _GstAmlVideoSinkPrivate
 {
-    gchar* render_device_name;
-    void* render_device_handle;
+    gchar *render_device_name;
+    void *render_device_handle;
     GstVideoInfo video_info;
     gboolean video_info_changed;
     gboolean use_dmabuf;
@@ -82,8 +83,7 @@ static gboolean gst_aml_video_sink_pad_event(GstAmlVideoSink *sink,
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
 static GstFlowReturn gst_tunnel_lib_play_rate(GstAmlVideoSink *sink);
 static GstFlowReturn gst_tunnel_lib_flush(GstAmlVideoSink *sink);
-static void render_callback(void *userData , RenderMessageType type, void *msg);
-
+static void render_callback(void *userData, RenderMessageType type, void *msg);
 
 /* public interface definition */
 static void gst_aml_video_sink_class_init(GstWaylandSinkClass *klass)
@@ -129,7 +129,6 @@ static void gst_aml_video_sink_class_init(GstWaylandSinkClass *klass)
         g_param_spec_boolean("set mute", "set mute params",
                              "Whether set screen mute ",
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
 }
 
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
@@ -177,7 +176,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
     case PROP_FULLSCREEN:
         GST_OBJECT_LOCK(sink);
         gboolean is_fullscreen = g_value_get_boolean(value);
-        if(sink_priv->fullscreen != is_fullscreen)
+        if (sink_priv->fullscreen != is_fullscreen)
         {
             sink_priv->fullscreen = is_fullscreen;
             //TODO set full screen to tunnel lib
@@ -187,7 +186,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
     case PROP_SETMUTE:
         GST_OBJECT_LOCK(sink);
         gboolean is_mute = g_value_get_boolean(value);
-        if(sink_priv->mute != is_mute)
+        if (sink_priv->mute != is_mute)
         {
             sink_priv->fullscreen = is_mute;
             //TODO set full screen to tunnel lib
@@ -225,17 +224,17 @@ gst_aml_video_sink_change_state(GstElement *element,
     case GST_STATE_CHANGE_NULL_TO_READY:
     {
         sink_priv->render_device_handle = render_open(sink_priv->render_device_name);
-        if(sink_priv->render_device_handle == NULL)
+        if (sink_priv->render_device_handle == NULL)
         {
             GST_ERROR_OBJECT(sink, "render lib: open device fail");
             goto error;
         }
-        if(render_set_callback(sink_priv->render_device_handle, render_callback) == 0)
+        if (render_set_callback(sink_priv->render_device_handle, render_callback) == 0)
         {
             GST_ERROR_OBJECT(sink, "render lib: set callback fail");
             goto error;
         }
-        if(render_set_user_data(sink_priv->render_device_handle, sink))
+        if (render_set_user_data(sink_priv->render_device_handle, sink))
         {
             GST_ERROR_OBJECT(sink, "render lib: set usr data fail");
             goto error;
@@ -245,7 +244,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_READY_TO_PAUSED:
     {
-        if( render_connect(sink_priv->render_device_handle) == 0)
+        if (render_connect(sink_priv->render_device_handle) == 0)
         {
             GST_ERROR_OBJECT(sink, "render lib connect device fail");
             goto error;
@@ -272,7 +271,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_READY_TO_NULL:
     {
-        if(sink_priv->render_device_handle)
+        if (sink_priv->render_device_handle)
         {
             render_close(sink_priv->render_device_handle);
         }
@@ -346,12 +345,11 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     gboolean use_dmabuf;
 
-
     GST_OBJECT_LOCK(sink);
 
     GST_DEBUG_OBJECT(sink, "set caps %" GST_PTR_FORMAT, caps);
     use_dmabuf = gst_caps_features_contains(gst_caps_get_features(caps, 0), GST_CAPS_FEATURE_MEMORY_DMABUF);
-    if(use_dmabuf == FALSE)
+    if (use_dmabuf == FALSE)
     {
         GST_DEBUG_OBJECT(sink, "not support non dma buffer case");
         return FALSE;
@@ -363,7 +361,7 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
         GST_ERROR_OBJECT(sink, "can't get video info from caps");
         return FALSE;
     }
-        goto invalid_format;
+    goto invalid_format;
 
     sink_priv->video_info_changed = TRUE;
 
@@ -371,8 +369,7 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
     return TRUE;
 }
 
-static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink,
-                                                   GstBuffer *buffer)
+static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffer *buffer)
 {
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(element);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
@@ -381,7 +378,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink,
 
     GST_OBJECT_LOCK(vsink);
 
-    if(sink_priv->render_device_handle == NULL)
+    if (!sink_priv->render_device_handle)
     {
         GST_ERROR_OBJECT(sink, "flow error, render_device_handle == NULL");
         goto error;
@@ -391,7 +388,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink,
     if (sink_priv->is_flushing)
     {
         gst_buffer_unref(buffer);
-        if(render_flush(sink_priv->render_device_handle) == 0)
+        if (!render_flush(sink_priv->render_device_handle))
         {
             GST_ERROR_OBJECT(sink, "render lib: flush error");
             goto error;
@@ -403,7 +400,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink,
     if (sink_priv->video_info_changed)
     {
         //TODO set para for tunnel lib, need convert GstVideoInfo to tunnel lib struct
-        if(render_set_params(sink_priv->render_device_handle, 0, NULL) == 0)
+        if (!render_set_params(sink_priv->render_device_handle, 0, NULL))
         {
             GST_ERROR_OBJECT(sink, "render lib: set params fail");
             goto error;
@@ -411,21 +408,24 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink,
         sink_priv->video_info_changed = FALSE;
     }
 
-    tunnel_lib_buf_wrap = render_allocate_render_buffer(sink_priv->render_device_handle, RENDER_BUFFER_TYPE_FD_FROM_LIB, 0);
-    tunnel_lib_buf_wrap->ext = buffer;
-    if(tunnel_lib_buf_wrap == NULL)
+    tunnel_lib_buf_wrap = render_allocate_render_buffer(sink_priv->render_device_handle, RENDER_BUFFER_TYPE_FD_FROM_USER, 0);
+    if (!tunnel_lib_buf_wrap)
     {
         GST_ERROR_OBJECT(sink, "render lib: alloc buffer wrap fail");
         goto error;
     }
-    //TODO get dmabuf fd from GstBuf and set to tunnel_lib_buf_wrap
-    if(render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == 0)
+    if (!gst_aml_video_sink_tunnel_buf(sink, buffer, tunnel_lib_buf_wrap))
+    {
+        GST_ERROR_OBJECT(sink, "construc render buffer fail");
+        goto error;
+    }
+
+    if (!render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap))
     {
         GST_ERROR_OBJECT(sink, "render lib: display frame fail");
         goto error;
     }
     GST_DEBUG_OBJECT(sink, "GstBuffer:0x%x queued", buffer);
-
 
 done:
     GST_OBJECT_UNLOCK(vsink);
@@ -491,21 +491,76 @@ static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
     sink_priv->use_dmabuf = USE_DMABUF;
 }
 
-static void render_callback(void *userData , RenderMessageType type, void *msg)
+static void render_callback(void *userData, RenderMessageType type, void *msg)
 {
-    GstAmlVideoSink *sink = (GstAmlVideoSink *) userData;
-    //TODO 从msg中拿到renderbuffer
-    RenderBuffer * tunnel_lib_buf_wrap;
-    GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->ext;
-    if(buffer)
+    GstAmlVideoSink *sink = (GstAmlVideoSink *)userData;
+    switch (type)
     {
-        GST_DEBUG_OBJECT(sink, "GstBuffer:0x%x rendered", buffer);
-        gst_buffer_unref(buffer);
-    }
-    else
+    case RENDER_MSG_RELEASE_BUFFER:
     {
-        GST_ERROR_OBJECT(sink, "tunnel lib: return void GstBuffer");
+        GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+        //TODO 从msg中拿到renderbuffer
+        RenderBuffer *tunnel_lib_buf_wrap;
+        GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->ext;
+
+        if (buffer)
+        {
+            GST_DEBUG_OBJECT(sink, "GstBuffer:0x%x rendered", buffer);
+            gst_buffer_unref(buffer);
+        }
+        else
+        {
+            GST_ERROR_OBJECT(sink, "tunnel lib: return void GstBuffer");
+        }
+        render_free_render_buffer(sink_priv->render_device_handle, tunnel_lib_buf_wrap);
+        break;
     }
+    default:
+    {
+        GST_ERROR_OBJECT(sink, "tunnel lib: error message type");
+    }
+    }
+    return;
+}
+
+static gboolean gst_aml_video_sink_tunnel_buf(GstVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap)
+{
+    // only support dma buf
+    GstMemory *dma_mem[GST_VIDEO_MAX_PLANES] = {0};
+    guint n_mem = 0;
+
+    if (gst_buf == NULL || tunnel_lib_buf_wrap tunnel_lib_buf_wrap == NULL)
+    {
+        GST_ERROR_OBJECT(vsink, "input params error");
+        goto error;
+    }
+    if (n_mem > GST_VIDEO_MAX_PLANES)
+    {
+        GST_ERROR_OBJECT(vsink, "too many memorys in gst buffer");
+        goto error;
+    }
+    n_mem = gst_buffer_n_memory(gst_buf);
+    for (i = 0; i < n_mem; i++)
+    {
+        gint dmafd;
+        gsize size, offset, maxsize;
+        dma_mem[i] = gst_buffer_peek_memory(src, i);
+        if (!gst_is_dmabuf_memory(dma_mem[i]))
+        {
+            GST_ERROR_OBJECT(vsink, "not support non-dma buf");
+            goto error;
+        }
+        size = gst_memory_get_sizes(dma_mem[i], &offset, &maxsize);
+        dmafd = gst_dmabuf_memory_get_fd(dma_mem[i]);
+        tunnel_lib_buf_wrap->data.fd[i] = dmafd;
+        tunnel_lib_buf_wrap->data.dataSize++ GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, fd:%d", i, tunnel_lib_buf_wrap->data.fd[i]);
+    }
+    tunnel_lib_buf_wrap->type = RENDER_BUFFER_TYPE_FD_FROM_USER;
+    tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
+    tunnel_lib_buf_wrap->ext = (void *)gst_buf;
+
+error:
+    return FALSE;
 }
 
 /* plugin init */

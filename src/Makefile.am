@@ -14,13 +14,13 @@ plugin_LTLIBRARIES = libgstamlvideosink.la
 ##############################################################################
 
 # sources used to compile this plug-in
-libgstamlvsink_la_SOURCES = gstamlvideosink.c
+libgstamlvideosink_la_SOURCES = gstamlvideosink.c
 # compiler and linker flags used to compile this plugin, set in configure.ac
-libgstamlvsink_la_CFLAGS = $(GST_CFLAGS)
-libgstamlvsink_la_LIBADD = $(GST_LIBS)
-libgstamlvsink_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
-libgstamlvsink_la_LIBADD += -L$(TARGET_DIR)/usr/lib
-libgstamlvsink_la_LIBTOOLFLAGS = --tag=disable-static
+libgstamlvideosink_la_CFLAGS = $(GST_CFLAGS)
+libgstamlvideosink_la_LIBADD = $(GST_LIBS)
+libgstamlvideosink_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
+libgstamlvideosink_la_LIBADD += -L$(TARGET_DIR)/usr/lib
+libgstamlvideosink_la_LIBTOOLFLAGS = --tag=disable-static
 
 # headers we need but don't want installed
 #noinst_HEADERS = 

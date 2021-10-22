@@ -4,7 +4,7 @@
 
 #include "gstamlvideosink.h"
 #include "render_lib.h"
-#include <stdbool.h>`
+#include <stdbool.h>
 #include <gst/gstdrmbufferpool.h>
 #include <gst/allocators/gstdmabuf.h>
 
@@ -40,7 +40,7 @@ struct _GstAmlVideoSinkPrivate
     gboolean video_info_changed;
     gboolean use_dmabuf;
     gboolean is_flushing;
-    _GstSegment segment;
+    GstSegment segment;
     /* property params */
     gboolean fullscreen;
     gboolean mute;
@@ -55,9 +55,9 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE(
 GST_DEBUG_CATEGORY(gst_aml_video_sink_debug);
 #define GST_CAT_DEFAULT gst_aml_video_sink_debug
 #define gst_aml_video_sink_parent_class parent_class
-#define GST_AML_VIDEO_SINK_GET_PRIVATE(obj)                      \
-    (G_TYPE_INSTANCE_GET_PRIVATE((obj), GST_TYPE_AML_VIDEO_SINK, \
-                                 GstAmlVideoSinkPrivate))
+// #define GST_AML_VIDEO_SINK_GET_PRIVATE(obj)                      \
+//     (G_TYPE_INSTANCE_GET_PRIVATE((obj), GST_TYPE_AML_VIDEO_SINK, \
+//                                  GstAmlVideoSinkPrivate))
 G_DEFINE_TYPE_WITH_CODE(GstAmlVideoSink, gst_aml_video_sink,
                         GST_TYPE_VIDEO_SINK, G_ADD_PRIVATE(GstAmlVideoSink));
 
@@ -74,19 +74,16 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
 static GstCaps *gst_aml_video_sink_get_caps(GstBaseSink *bsink,
                                             GstCaps *filter);
 static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps);
-static gboolean static gboolean
-gst_aml_video_sink_show_frame(GstVideoSink *bsink, GstBuffer *buffer);
-static gboolean gst_aml_video_sink_pad_event(GstAmlVideoSink *sink,
-                                             GstEvent *event);
+static gboolean gst_aml_video_sink_show_frame(GstVideoSink *bsink, GstBuffer *buffer);
+static gboolean gst_aml_video_sink_pad_event(GstPad * pad, GstObject * parent, GstEvent * event);
 
 /* private interface define */
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
-static GstFlowReturn gst_tunnel_lib_play_rate(GstAmlVideoSink *sink);
-static GstFlowReturn gst_tunnel_lib_flush(GstAmlVideoSink *sink);
-static void render_callback(void *userData, RenderMessageType type, void *msg);
+static void gst_render_callback(void *userData, RenderMessageType type, void *msg);
+static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
 
 /* public interface definition */
-static void gst_aml_video_sink_class_init(GstWaylandSinkClass *klass)
+static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
 {
     GObjectClass *gobject_class;
     GstElementClass *gstelement_class;
@@ -134,7 +131,6 @@ static void gst_aml_video_sink_class_init(GstWaylandSinkClass *klass)
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
 {
     GstBaseSink *basesink = (GstBaseSink *)sink;
-    GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
 
     gst_pad_set_event_function(basesink->sinkpad, gst_aml_video_sink_pad_event);
     gst_aml_video_sink_reset_private(sink);
@@ -155,7 +151,7 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         break;
     case PROP_SETMUTE:
         GST_OBJECT_LOCK(sink);
-        g_value_set_boolean(value, sink->mute);
+        g_value_set_boolean(value, sink_priv->mute);
         GST_OBJECT_UNLOCK(sink);
         break;
     default:
@@ -214,8 +210,6 @@ gst_aml_video_sink_change_state(GstElement *element,
 {
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(element);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
-    GstAmlVideoSinkClass *class = GST_AML_VIDEO_SINK_CLASS(element);
-    GstBaseSinkClass *base_class = (GstBaseSinkClass *)class;
     GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
 
     GST_OBJECT_LOCK(sink);
@@ -229,7 +223,7 @@ gst_aml_video_sink_change_state(GstElement *element,
             GST_ERROR_OBJECT(sink, "render lib: open device fail");
             goto error;
         }
-        if (render_set_callback(sink_priv->render_device_handle, render_callback) == 0)
+        if (render_set_callback(sink_priv->render_device_handle, (render_callback*)gst_render_callback) == 0)
         {
             GST_ERROR_OBJECT(sink, "render lib: set callback fail");
             goto error;
@@ -295,17 +289,19 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
 {
     //TODO only implement dma case
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(bsink);
+    GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+
     GstCaps *caps;
     GstBufferPool *pool = NULL;
     gboolean need_pool;
-    GstAllocator *alloc;
 
     gst_query_parse_allocation(query, &caps, &need_pool);
 
     if (need_pool)
-        pool = gst_drm_bufferpool_new(sink->secure, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
+        //TODO 没有考虑secure场景
+        pool = gst_drm_bufferpool_new(FALSE, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
 
-    gst_query_add_allocation_pool(query, pool, sink->video_info.size, 2, 0);
+    gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, 2, 0);
     if (pool)
         g_object_unref(pool);
 
@@ -361,7 +357,6 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
         GST_ERROR_OBJECT(sink, "can't get video info from caps");
         return FALSE;
     }
-    goto invalid_format;
 
     sink_priv->video_info_changed = TRUE;
 
@@ -371,7 +366,7 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
 
 static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffer *buffer)
 {
-    GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(element);
+    GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstFlowReturn ret = GST_FLOW_OK;
     RenderBuffer *tunnel_lib_buf_wrap = NULL;
@@ -425,7 +420,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         GST_ERROR_OBJECT(sink, "render lib: display frame fail");
         goto error;
     }
-    GST_DEBUG_OBJECT(sink, "GstBuffer:0x%x queued", buffer);
+    GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued", buffer);
 
 done:
     GST_OBJECT_UNLOCK(vsink);
@@ -436,13 +431,11 @@ error:
     return ret;
 }
 
-static gboolean gst_aml_video_sink_pad_event(GstAmlVideoSink *sink,
-                                             GstEvent *event)
+static gboolean gst_aml_video_sink_pad_event(GstPad * pad, GstObject * parent, GstEvent * event)
 {
     gboolean result = TRUE;
-    GstBaseSink *bsink = GST_BASE_SINK_CAST(sink);
-    GstAmlVideoSinkPrivate *sink_priv =
-        GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+    GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(parent);
+    GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
 
     switch (GST_EVENT_TYPE(event))
     {
@@ -475,7 +468,7 @@ static gboolean gst_aml_video_sink_pad_event(GstAmlVideoSink *sink,
     default:
     {
         GST_DEBUG_OBJECT(sink, "pass to basesink");
-        return GST_BASE_SINK_CLASS(parent_class)->event(bsink, event);
+        return GST_BASE_SINK_CLASS(parent_class)->event((GstBaseSink *)sink, event);
     }
     }
     gst_event_unref(event);
@@ -491,7 +484,7 @@ static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
     sink_priv->use_dmabuf = USE_DMABUF;
 }
 
-static void render_callback(void *userData, RenderMessageType type, void *msg)
+static void gst_render_callback(void *userData, RenderMessageType type, void *msg)
 {
     GstAmlVideoSink *sink = (GstAmlVideoSink *)userData;
     switch (type)
@@ -505,7 +498,7 @@ static void render_callback(void *userData, RenderMessageType type, void *msg)
 
         if (buffer)
         {
-            GST_DEBUG_OBJECT(sink, "GstBuffer:0x%x rendered", buffer);
+            GST_DEBUG_OBJECT(sink, "GstBuffer:%p rendered", buffer);
             gst_buffer_unref(buffer);
         }
         else
@@ -523,13 +516,13 @@ static void render_callback(void *userData, RenderMessageType type, void *msg)
     return;
 }
 
-static gboolean gst_aml_video_sink_tunnel_buf(GstVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap)
+static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap)
 {
     // only support dma buf
     GstMemory *dma_mem[GST_VIDEO_MAX_PLANES] = {0};
     guint n_mem = 0;
 
-    if (gst_buf == NULL || tunnel_lib_buf_wrap tunnel_lib_buf_wrap == NULL)
+    if (gst_buf == NULL || tunnel_lib_buf_wrap == NULL)
     {
         GST_ERROR_OBJECT(vsink, "input params error");
         goto error;
@@ -540,11 +533,11 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstVideoSink *vsink, GstBuffer *gs
         goto error;
     }
     n_mem = gst_buffer_n_memory(gst_buf);
-    for (i = 0; i < n_mem; i++)
+    for (guint i = 0; i < n_mem; i++)
     {
         gint dmafd;
         gsize size, offset, maxsize;
-        dma_mem[i] = gst_buffer_peek_memory(src, i);
+        dma_mem[i] = gst_buffer_peek_memory(gst_buf, i);
         if (!gst_is_dmabuf_memory(dma_mem[i]))
         {
             GST_ERROR_OBJECT(vsink, "not support non-dma buf");
@@ -553,7 +546,8 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstVideoSink *vsink, GstBuffer *gs
         size = gst_memory_get_sizes(dma_mem[i], &offset, &maxsize);
         dmafd = gst_dmabuf_memory_get_fd(dma_mem[i]);
         tunnel_lib_buf_wrap->data.fd[i] = dmafd;
-        tunnel_lib_buf_wrap->data.dataSize++ GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, fd:%d", i, tunnel_lib_buf_wrap->data.fd[i]);
+        tunnel_lib_buf_wrap->dataSize++;
+        GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, fd:%d", i, tunnel_lib_buf_wrap->data.fd[i]);
     }
     tunnel_lib_buf_wrap->type = RENDER_BUFFER_TYPE_FD_FROM_USER;
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
@@ -573,6 +567,6 @@ static gboolean plugin_init(GstPlugin *plugin)
                                 GST_TYPE_AML_VIDEO_SINK);
 }
 
-GST_PLUGIN_DEFINE(GST_VERSION_MAJOR, GST_VERSION_MINOR, waylandsink,
+GST_PLUGIN_DEFINE(GST_VERSION_MAJOR, GST_VERSION_MINOR, amlvideosink,
                   "aml Video Sink", plugin_init, VERSION, "LGPL",
-                  GST_PACKAGE_NAME, GST_PACKAGE_ORIGIN)
+                  "gst-plugin-video-sink", "")

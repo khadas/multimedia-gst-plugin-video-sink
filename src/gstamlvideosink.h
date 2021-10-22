@@ -18,6 +18,8 @@ G_BEGIN_DECLS
 	    (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_AML_VIDEO_SINK))
 #define GST_AML_VIDEO_SINK_GET_CLASS(inst) \
         (G_TYPE_INSTANCE_GET_CLASS ((inst), GST_TYPE_AML_VIDEO_SINK, GstAmlVideoSinkClass))
+#define GST_AML_VIDEO_SINK_GET_PRIVATE(obj) ((GST_AML_VIDEO_SINK (obj))->priv)
+
 
 typedef struct _GstAmlVideoSink GstAmlVideoSink;
 typedef struct _GstAmlVideoSinkClass GstAmlVideoSinkClass;
@@ -29,7 +31,7 @@ struct _GstAmlVideoSink
   GstAmlVideoSinkPrivate *priv;
 };
 
-struct _GstWaylandSinkClass
+struct _GstAmlVideoSinkClass
 {
   GstVideoSinkClass parent;
 };

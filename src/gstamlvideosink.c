@@ -81,6 +81,8 @@ static gboolean gst_aml_video_sink_pad_event(GstPad * pad, GstObject * parent, G
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
 static void gst_render_callback(void *userData, RenderMessageType type, void *msg);
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
+static gboolean gst_get_mediasync_instanceid_callback(void *userData, gint *instance_id)
+static GstElement* gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
 
 /* public interface definition */
 static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
@@ -555,6 +557,112 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
 
 error:
     return FALSE;
+}
+
+static gboolean gst_get_mediasync_instanceid_callback(void *userData, gint *instance_id)
+{
+    GstAmlVideoSink *vsink = (GstAmlVideoSink *)userData;
+    GstElement* asink = gst_aml_video_sink_find_audio_sink(vsink);
+    g_return_val_if_fail ((instance_id && asink && GST_IS_AML_HAL_ASINK(asink)), FALSE);
+    GstAmlHalAsink *aml_asink = (GstAmlHalAsink *)asink;
+    GstClock* amlclock= gst_aml_hal_asink_get_clock(aml_asink);
+    instance_id = 0xFF;
+    GST_DEBUG_OBJECT (vsink, "init instance_id to 0xFF for invalid instance id");
+    if (amlclock)
+    {
+        instance_id = gst_aml_clock_get_session_id(amlclock);
+        GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d, from aml audio clock:%p. in aml audio sink:%p", 
+                        instance_id, amlclock, vsink);
+        gst_object_unref(amlclock);
+    }
+    else
+    {
+        GST_WARNING_OBJECT (vsink, "no clock: vmaster mode");
+    }
+    gst_object_unref(aml_asink);
+}
+
+static GstElement* gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
+{
+   GstElement *audioSink= 0;
+   GstElement *pipeline= 0;
+   GstElement *element, *elementPrev= 0;
+   GstIterator *iterator;
+
+   element= GST_ELEMENT_CAST(sink);
+   do
+   {
+      if ( elementPrev )
+      {
+         gst_object_unref( elementPrev );
+      }
+      element= GST_ELEMENT_CAST(gst_element_get_parent( element ));
+      if ( element )
+      {
+         elementPrev= pipeline;
+         pipeline= element;
+      }
+   }
+   while( element != 0 );
+
+   if ( pipeline )
+   {
+      GstIterator *iterElement= gst_bin_iterate_recurse( GST_BIN(pipeline) );
+      if ( iterElement )
+      {
+         GValue itemElement= G_VALUE_INIT;
+         while( gst_iterator_next( iterElement, &itemElement ) == GST_ITERATOR_OK )
+         {
+            element= (GstElement*)g_value_get_object( &itemElement );
+            if ( element && !GST_IS_BIN(element) )
+            {
+               int numSrcPads= 0;
+
+               GstIterator *iterPad= gst_element_iterate_src_pads( element );
+               if ( iterPad )
+               {
+                  GValue itemPad= G_VALUE_INIT;
+                  while( gst_iterator_next( iterPad, &itemPad ) == GST_ITERATOR_OK )
+                  {
+                     GstPad *pad= (GstPad*)g_value_get_object( &itemPad );
+                     if ( pad )
+                     {
+                        ++numSrcPads;
+                     }
+                     g_value_reset( &itemPad );
+                  }
+                  gst_iterator_free(iterPad);
+               }
+
+               if ( numSrcPads == 0 )
+               {
+                  GstElementClass *ec= GST_ELEMENT_GET_CLASS(element);
+                  if ( ec )
+                  {
+                     const gchar *meta= gst_element_class_get_metadata( ec, GST_ELEMENT_METADATA_KLASS);
+                     if ( meta && strstr(meta, "Sink") && strstr(meta, "Audio") )
+                     {
+                        audioSink= (GstElement*)gst_object_ref( element );
+                        gchar *name= gst_element_get_name( element );
+                        if ( name )
+                        {
+                           GST_DEBUG( "detected audio sink: name (%s)", name);
+                           g_free( name );
+                        }
+                        g_value_reset( &itemElement );
+                        break;
+                     }
+                  }
+               }
+            }
+            g_value_reset( &itemElement );
+         }
+         gst_iterator_free(iterElement);
+      }
+
+      gst_object_unref(pipeline);
+   }
+   return audioSink;
 }
 
 /* plugin init */

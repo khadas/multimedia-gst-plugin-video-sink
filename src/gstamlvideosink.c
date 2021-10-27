@@ -2,11 +2,19 @@
 #include <config.h>
 #endif
 
-#include "gstamlvideosink.h"
-#include "render_lib.h"
+
 #include <stdbool.h>
 #include <gst/gstdrmbufferpool.h>
 #include <gst/allocators/gstdmabuf.h>
+#include "gstamlvideosink.h"
+#include "render_lib.h"
+// #ifdef USE_AMLOGIC_MESON
+// #ifdef USE_AMLOGIC_MESON_MSYNC
+// #define INVALID_SESSION_ID (16)
+#include "gstamlclock.h"
+#include "gstamlhalasink_new.h"
+// #endif
+// #endif
 
 /* signals */
 enum
@@ -55,9 +63,7 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE(
 GST_DEBUG_CATEGORY(gst_aml_video_sink_debug);
 #define GST_CAT_DEFAULT gst_aml_video_sink_debug
 #define gst_aml_video_sink_parent_class parent_class
-// #define GST_AML_VIDEO_SINK_GET_PRIVATE(obj)                      \
-//     (G_TYPE_INSTANCE_GET_PRIVATE((obj), GST_TYPE_AML_VIDEO_SINK, \
-//                                  GstAmlVideoSinkPrivate))
+// #define GST_AML_VIDEO_SINK_GET_PRIVATE(obj)  (G_TYPE_INSTANCE_GET_PRIVATE((obj), GST_TYPE_AML_VIDEO_SINK, GstAmlVideoSinkPrivate))
 G_DEFINE_TYPE_WITH_CODE(GstAmlVideoSink, gst_aml_video_sink,
                         GST_TYPE_VIDEO_SINK, G_ADD_PRIVATE(GstAmlVideoSink));
 
@@ -81,7 +87,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad * pad, GstObject * parent, G
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
 static void gst_render_callback(void *userData, RenderMessageType type, void *msg);
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
-static gboolean gst_get_mediasync_instanceid_callback(void *userData, gint *instance_id)
+static gboolean gst_get_mediasync_instanceid_callback(void *userData, gint *instance_id);
 static GstElement* gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
 
 /* public interface definition */
@@ -564,22 +570,22 @@ static gboolean gst_get_mediasync_instanceid_callback(void *userData, gint *inst
     GstAmlVideoSink *vsink = (GstAmlVideoSink *)userData;
     GstElement* asink = gst_aml_video_sink_find_audio_sink(vsink);
     g_return_val_if_fail ((instance_id && asink && GST_IS_AML_HAL_ASINK(asink)), FALSE);
-    GstAmlHalAsink *aml_asink = (GstAmlHalAsink *)asink;
-    GstClock* amlclock= gst_aml_hal_asink_get_clock(aml_asink);
-    instance_id = 0xFF;
-    GST_DEBUG_OBJECT (vsink, "init instance_id to 0xFF for invalid instance id");
+    GstClock* amlclock= gst_aml_hal_asink_get_clock((GstElement *)asink);
+    *instance_id = -1;
+    GST_DEBUG_OBJECT (vsink, "init instance_id to -1 for invalid instance id");
     if (amlclock)
     {
-        instance_id = gst_aml_clock_get_session_id(amlclock);
+        *instance_id = gst_aml_clock_get_session_id(amlclock);
         GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d, from aml audio clock:%p. in aml audio sink:%p", 
-                        instance_id, amlclock, vsink);
+                        *instance_id, amlclock, vsink);
         gst_object_unref(amlclock);
     }
     else
     {
         GST_WARNING_OBJECT (vsink, "no clock: vmaster mode");
     }
-    gst_object_unref(aml_asink);
+    gst_object_unref(asink);
+    return TRUE;
 }
 
 static GstElement* gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
@@ -587,7 +593,6 @@ static GstElement* gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
    GstElement *audioSink= 0;
    GstElement *pipeline= 0;
    GstElement *element, *elementPrev= 0;
-   GstIterator *iterator;
 
    element= GST_ELEMENT_CAST(sink);
    do

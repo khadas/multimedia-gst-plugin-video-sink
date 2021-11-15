@@ -85,7 +85,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
 
 /* private interface define */
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
-static void gst_render_msg_callback(void *userData, RenderMessageType type, void *msg);
+static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
 static int gst_render_val_callback(void *userData, int key, void *value);
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink);
@@ -233,16 +233,9 @@ gst_aml_video_sink_change_state(GstElement *element,
             GST_ERROR_OBJECT(sink, "render lib: open device fail");
             goto error;
         }
-        if (render_set_callback(sink_priv->render_device_handle, (render_callback *)gst_render_callback) == 0)
-        {
-            GST_ERROR_OBJECT(sink, "render lib: set callback fail");
-            goto error;
-        }
-        if (render_set_user_data(sink_priv->render_device_handle, sink))
-        {
-            GST_ERROR_OBJECT(sink, "render lib: set usr data fail");
-            goto error;
-        }
+        RenderCallback cb = {gst_render_msg_callback, gst_render_val_callback};
+        render_set_callback(sink_priv->render_device_handle, &cb);
+        render_set_user_data(sink_priv->render_device_handle, sink);
 
         break;
     }
@@ -494,7 +487,7 @@ static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
     sink_priv->mediasync_instanceid = -1;
 }
 
-static void gst_render_msg_callback(void *userData, RenderMessageType type, void *msg)
+static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
 {
     GstAmlVideoSink *sink = (GstAmlVideoSink *)userData;
     switch (type)
@@ -539,15 +532,16 @@ int gst_render_val_callback(void *userData, int key, void *value)
 {
     GstAmlVideoSink *vsink = (GstAmlVideoSink *)userData;
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
+    gint *val = (gint *)value;
     gint ret = 0;
-    switch (type)
+    switch (key)
     {
     case KEY_GET_MEDIASYNC_INSTANCE:
     {
         if (gst_get_mediasync_instanceid(vsink))
         {
-            *value = sink_priv->mediasync_instanceid;
-            GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d", sink_priv->mediasync_instanceid);
+            *val = sink_priv->mediasync_instanceid;
+            GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d", *val);
         }
         else
         {
@@ -558,9 +552,9 @@ int gst_render_val_callback(void *userData, int key, void *value)
     }
     case KEY_VIDEO_FORMAT:
     {
-        *value = sink_priv->video_info.finfo->format;
-        GST_DEBUG_OBJECT(vsink, "get video format:%d", *value);
-        if (*value == GST_VIDEO_FORMAT_UNKNOWN)
+        *val = sink_priv->video_info.finfo->format;
+        GST_DEBUG_OBJECT(vsink, "get video format:%d", *val);
+        if (*val == GST_VIDEO_FORMAT_UNKNOWN)
         {
             GST_ERROR_OBJECT(vsink, "get video format error");
             ret = -1;
@@ -579,7 +573,9 @@ int gst_render_val_callback(void *userData, int key, void *value)
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap)
 {
     // only support dma buf
-    GstMemory *dma_mem[GST_VIDEO_MAX_PLANES] = {0};
+    RenderDmaBuffer *dmabuf = tunnel_lib_buf_wrap->dma;
+    GstMemory *dma_mem = NULL;
+    GstVideoMeta *vmeta = NULL;
     guint n_mem = 0;
 
     if (gst_buf == NULL || tunnel_lib_buf_wrap == NULL)
@@ -587,31 +583,45 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         GST_ERROR_OBJECT(vsink, "input params error");
         goto error;
     }
-    if (n_mem > GST_VIDEO_MAX_PLANES)
+    n_mem = gst_buffer_n_memory(gst_buf);
+    vmeta = gst_buffer_get_video_meta (gst_buf);
+    if(vmeta == NULL)
+    {
+        GST_ERROR_OBJECT(vsink, "not found video meta info");
+        goto error;
+    }
+    if (n_mem > RENDER_MAX_PLANES || vmeta->n_planes > RENDER_MAX_PLANES || n_mem != vmeta->n_planes)
     {
         GST_ERROR_OBJECT(vsink, "too many memorys in gst buffer");
         goto error;
     }
-    n_mem = gst_buffer_n_memory(gst_buf);
+    
+    dmabuf->planeCnt = n_mem;
+    dmabuf->width = vmeta->width;
+    dmabuf->height = vmeta->height;
     for (guint i = 0; i < n_mem; i++)
     {
         gint dmafd;
         gsize size, offset, maxsize;
-        dma_mem[i] = gst_buffer_peek_memory(gst_buf, i);
-        if (!gst_is_dmabuf_memory(dma_mem[i]))
+        dma_mem = gst_buffer_peek_memory(gst_buf, i);
+        if (!gst_is_dmabuf_memory(dma_mem))
         {
             GST_ERROR_OBJECT(vsink, "not support non-dma buf");
             goto error;
         }
-        size = gst_memory_get_sizes(dma_mem[i], &offset, &maxsize);
-        dmafd = gst_dmabuf_memory_get_fd(dma_mem[i]);
-        tunnel_lib_buf_wrap->data.fd[i] = dmafd;
-        tunnel_lib_buf_wrap->dataSize++;
-        GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, fd:%d", i, tunnel_lib_buf_wrap->data.fd[i]);
+        size = gst_memory_get_sizes(dma_mem, &offset, &maxsize);
+        dmafd = gst_dmabuf_memory_get_fd(dma_mem);
+        dmabuf->handle[i] = 0;
+        dmabuf->fd[i] = dmafd;
+        dmabuf->size[i] = dma_mem->size;
+        dmabuf->offset[i] = vmeta->offset[i];
+        dmabuf->stride[i] = vmeta->stride[i];
+        GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, handle:%d, fd:%d, size:%d, offset:%d, stride:%d", 
+                         i, dmabuf->handle[i], dmabuf->fd[i], dmabuf->size[i], dmabuf->offset[i], dmabuf->stride[i]);
     }
-    tunnel_lib_buf_wrap->type = RENDER_BUFFER_TYPE_FD_FROM_USER;
+    tunnel_lib_buf_wrap->flag = BUFFER_FLAG_EXTER_DMA_BUFFER;
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
-    tunnel_lib_buf_wrap->ext = (void *)gst_buf;
+    tunnel_lib_buf_wrap->priv = (void *)gst_buf;
 
 error:
     return FALSE;

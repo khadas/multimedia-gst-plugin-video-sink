@@ -8,7 +8,7 @@ RDEPENDS_${PN} = " "
 
 # SRC_URI = "git://${AML_GIT_ROOT}/linux/multimedia/gst_plugin_video_sink.git;protocol=${AML_GIT_PROTOCOL};branch=dev"
 
-LDFLAGS_append  = " -lgstamlhalasink -lmediahal_videorender -L${STAGING_LIBDIR}/gstreamer-1.0 -Wl,-rpath -Wl,/usr/lib/gstreamer-1.0"
+LDFLAGS_append  = " -lgstamlhalasink -lmediahal_videorender -lgstvideo-1.0 -lgstdrmbufferpool -lgstdrmallocator -L${STAGING_LIBDIR}/gstreamer-1.0 -Wl,-rpath -Wl,/usr/lib/gstreamer-1.0"
 
 SRCREV ?= "${AUTOREV}"
 PV = "${SRCPV}"

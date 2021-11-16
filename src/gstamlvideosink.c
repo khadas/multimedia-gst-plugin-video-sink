@@ -141,8 +141,8 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
 {
     GstBaseSink *basesink = (GstBaseSink *)sink;
-
     gst_pad_set_event_function(basesink->sinkpad, gst_aml_video_sink_pad_event);
+    GST_AML_VIDEO_SINK_GET_PRIVATE(sink) = malloc (sizeof(GstAmlVideoSinkPrivate));
     gst_aml_video_sink_reset_private(sink);
 }
 
@@ -211,6 +211,8 @@ static void gst_aml_video_sink_finalize(GObject *object)
 
     GST_DEBUG_OBJECT(sink, "Finalizing aml video sink..");
     gst_aml_video_sink_reset_private(sink);
+    if(GST_AML_VIDEO_SINK_GET_PRIVATE(sink))
+        free(GST_AML_VIDEO_SINK_GET_PRIVATE(sink));
     G_OBJECT_CLASS(parent_class)->finalize(object);
 }
 
@@ -757,13 +759,31 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
 /* plugin init */
 static gboolean plugin_init(GstPlugin *plugin)
 {
-    GST_DEBUG_CATEGORY_INIT(gst_aml_video_sink_debug, "amlvideosink", 0,
-                            " aml video sink");
+    // GST_DEBUG_CATEGORY_INIT(gst_aml_video_sink_debug, "amlvideosink", 0,
+    //                         " aml video sink");
+    // GST_DEBUG("trace in amlvideosink 111");
 
-    return gst_element_register(plugin, "amlvideosink", 1,
+    return gst_element_register(plugin, "amlvideosink", 300,
                                 GST_TYPE_AML_VIDEO_SINK);
 }
 
-GST_PLUGIN_DEFINE(GST_VERSION_MAJOR, GST_VERSION_MINOR, amlvideosink,
-                  "aml Video Sink", plugin_init, VERSION, "LGPL",
-                  "gst-plugin-video-sink", "")
+#ifndef VERSION
+#define VERSION "0.1.0"
+#endif
+#ifndef PACKAGE
+#define PACKAGE "aml_package"
+#endif
+#ifndef PACKAGE_NAME
+#define PACKAGE_NAME "aml_media"
+#endif
+#ifndef GST_PACKAGE_ORIGIN
+#define GST_PACKAGE_ORIGIN "http://amlogic.com"
+#endif
+// GST_PLUGIN_DEFINE(GST_VERSION_MAJOR, GST_VERSION_MINOR, amlvideosink,
+//                   "aml Video Sink", plugin_init, VERSION, "LGPL",
+//                   "gst-plugin-video-sink", "")
+GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
+    GST_VERSION_MINOR,
+    amlvideosink,
+    "Amlogic plugin for video decoding/rendering",
+    plugin_init, VERSION, "LGPL", PACKAGE_NAME, GST_PACKAGE_ORIGIN)

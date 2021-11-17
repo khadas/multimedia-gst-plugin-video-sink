@@ -85,8 +85,8 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
 
 /* private interface define */
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
-static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
-static int gst_render_val_callback(void *userData, int key, void *value);
+void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
+int gst_render_val_callback(void *userData, int key, void *value);
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink);
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
@@ -243,7 +243,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_READY_TO_PAUSED:
     {
-        if (render_connect(sink_priv->render_device_handle) == 0)
+        if (render_connect(sink_priv->render_device_handle) == -1)
         {
             GST_ERROR_OBJECT(sink, "render lib connect device fail");
             goto error;
@@ -255,6 +255,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     GST_OBJECT_UNLOCK(sink);
 
+    GST_LOG_OBJECT(sink, "amlvideosink deal state change ok, goto basesink state change");
     ret = GST_ELEMENT_CLASS(parent_class)->change_state(element, transition);
 
     GST_OBJECT_LOCK(sink);
@@ -489,7 +490,7 @@ static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
     sink_priv->mediasync_instanceid = -1;
 }
 
-static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
+void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
 {
     GstAmlVideoSink *sink = (GstAmlVideoSink *)userData;
     switch (type)
@@ -759,9 +760,8 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
 /* plugin init */
 static gboolean plugin_init(GstPlugin *plugin)
 {
-    // GST_DEBUG_CATEGORY_INIT(gst_aml_video_sink_debug, "amlvideosink", 0,
-    //                         " aml video sink");
-    // GST_DEBUG("trace in amlvideosink 111");
+    GST_DEBUG_CATEGORY_INIT(gst_aml_video_sink_debug, "amlvideosink", 0,
+                            " aml video sink");
 
     return gst_element_register(plugin, "amlvideosink", 300,
                                 GST_TYPE_AML_VIDEO_SINK);

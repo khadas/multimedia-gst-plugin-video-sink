@@ -223,6 +223,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(element);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+    GST_DEBUG_OBJECT(sink, "trace in");
 
     GST_OBJECT_LOCK(sink);
     switch (transition)
@@ -535,11 +536,11 @@ int gst_render_val_callback(void *userData, int key, void *value)
 {
     GstAmlVideoSink *vsink = (GstAmlVideoSink *)userData;
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
-    gint *val = (gint *)value;
+    int *val = (int *)value;
     gint ret = 0;
     switch (key)
     {
-    case KEY_GET_MEDIASYNC_INSTANCE:
+    case KEY_MEDIASYNC_SYNC_MODE:
     {
         if (gst_get_mediasync_instanceid(vsink))
         {
@@ -555,11 +556,15 @@ int gst_render_val_callback(void *userData, int key, void *value)
     }
     case KEY_VIDEO_FORMAT:
     {
-        *val = sink_priv->video_info.finfo->format;
-        GST_DEBUG_OBJECT(vsink, "get video format:%d", *val);
-        if (*val == GST_VIDEO_FORMAT_UNKNOWN)
+        if(sink_priv->video_info.finfo != NULL)
+        {
+            *val = sink_priv->video_info.finfo->format;
+            GST_DEBUG_OBJECT(vsink, "get video format:%d", *val);
+        }
+        else
         {
             GST_ERROR_OBJECT(vsink, "get video format error");
+            *val = GST_VIDEO_FORMAT_UNKNOWN;
             ret = -1;
         }
         break;
@@ -744,16 +749,23 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
 
     RenderWindowSize window_size = {0, 0, video_info->width, video_info->height};
     RenderFrameSize frame_size = {video_info->width, video_info->height};
-    if (render_set_props(sink_priv->render_device_handle, PROP_WINDOW_SIZE, &window_size) == -1)
+    GstVideoFormat format = video_info->finfo? video_info->finfo->format : GST_VIDEO_FORMAT_UNKNOWN;
+    if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
     {
         GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
         return FALSE;
     }
-    if (render_set_props(sink_priv->render_device_handle, PROP_FRAME_SIZE, &frame_size))
+    if (render_set(sink_priv->render_device_handle, KEY_FRAME_SIZE, &frame_size))
     {
         GST_ERROR_OBJECT(vsink, "tunnel lib: set frame size error");
         return FALSE;
     }
+    if (render_set(sink_priv->render_device_handle, KEY_VIDEO_FORMAT, &format))
+    {
+        GST_ERROR_OBJECT(vsink, "tunnel lib: set video format error");
+        return FALSE;
+    }
+
     return TRUE;
 }
 

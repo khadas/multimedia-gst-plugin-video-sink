@@ -314,6 +314,7 @@ error:
 
 static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQuery *query)
 {
+    GST_DEBUG_OBJECT(bsink, "trace in");
     //TODO only implement dma case
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(bsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
@@ -323,6 +324,7 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
     gboolean need_pool;
 
     gst_query_parse_allocation(query, &caps, &need_pool);
+    GST_DEBUG_OBJECT(bsink, "jxsaaa need_pool:%d", need_pool);
 
     if (need_pool)
         //TODO 没有考虑secure场景
@@ -372,13 +374,13 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
     GST_OBJECT_LOCK(sink);
 
     GST_DEBUG_OBJECT(sink, "set caps %" GST_PTR_FORMAT, caps);
-    use_dmabuf = gst_caps_features_contains(gst_caps_get_features(caps, 0), GST_CAPS_FEATURE_MEMORY_DMABUF);
-    if (use_dmabuf == FALSE)
-    {
-        GST_ERROR_OBJECT(sink, "not support non dma buffer case");
-        ret = FALSE;
-        goto done;
-    }
+    // use_dmabuf = gst_caps_features_contains(gst_caps_get_features(caps, 0), GST_CAPS_FEATURE_MEMORY_DMABUF);
+    // if (use_dmabuf == FALSE)
+    // {
+    //     GST_ERROR_OBJECT(sink, "not support non dma buffer case");
+    //     ret = FALSE;
+    //     goto done;
+    // }
 
     /* extract info from caps */
     if (!gst_video_info_from_caps(&sink_priv->video_info, caps))
@@ -450,13 +452,14 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         GST_ERROR_OBJECT(sink, "render lib: display frame fail");
         goto error;
     }
-    GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued", buffer);
 
 done:
     GST_OBJECT_UNLOCK(vsink);
+    GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued ok", buffer);
     return ret;
 error:
     GST_OBJECT_UNLOCK(vsink);
+    GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued error", buffer);
     ret = GST_FLOW_CUSTOM_ERROR_2;
     return ret;
 }
@@ -610,7 +613,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
     GstVideoMeta *vmeta = NULL;
     guint n_mem = 0;
 
-    if (gst_buf == NULL || tunnel_lib_buf_wrap == NULL)
+    if (gst_buf == NULL || tunnel_lib_buf_wrap == NULL || dmabuf == NULL)
     {
         GST_ERROR_OBJECT(vsink, "input params error");
         goto error;
@@ -627,6 +630,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         GST_ERROR_OBJECT(vsink, "too many memorys in gst buffer");
         goto error;
     }
+    GST_DEBUG_OBJECT(vsink, "dbg3-0, dmabuf:%p", dmabuf);
     
     dmabuf->planeCnt = n_mem;
     dmabuf->width = vmeta->width;

@@ -257,20 +257,19 @@ int render_connect(void *handle);
 int render_display_frame(void *handle, RenderBuffer *buffer);
 
 /**
- * set property to render device,user must alloc a prop struct buffer of
- * the property
+ * set value to render device
  * @param handle a handle of render device that was opened
- * @param property a property of render device
- * @param prop property struct buffer of property
+ * @param key a key of render device
+ * @param value the value of key
  * @return 0 sucess,-1 fail
  */
 int render_set(void *handle, int key, void *value);
 
 /**
- * get property from render device
+ * get value from render device
  * @param handle a handle of render device that was opened
- * @param property a property of render device
- * @param prop property struct buffer of property
+ * @param key a key of render device
+ * @param value the value of key
  * @return 0 sucess,-1 fail
  */
 int render_get(void *handle, int key, void *value);

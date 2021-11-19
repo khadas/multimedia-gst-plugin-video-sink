@@ -15,6 +15,26 @@
 // #endif
 // #endif
 
+#ifdef GST_OBJECT_LOCK
+#undef GST_OBJECT_LOCK
+#define GST_OBJECT_LOCK(obj) \
+{ \
+  GST_DEBUG("dbg basesink ctxt lock | aml | %p | locking", obj); \
+  g_mutex_lock(GST_OBJECT_GET_LOCK(obj)); \
+  GST_DEBUG("dbg basesink ctxt lock | aml | %p | locked", obj); \
+} 
+#endif
+
+#ifdef GST_OBJECT_UNLOCK
+#undef GST_OBJECT_UNLOCK
+#define GST_OBJECT_UNLOCK(obj) \
+{ \
+  GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocking", obj); \
+  g_mutex_unlock(GST_OBJECT_GET_LOCK(obj)); \
+  GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocked", obj); \
+} 
+#endif
+
 /* signals */
 enum
 {
@@ -347,6 +367,7 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(bsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     gboolean use_dmabuf;
+    gboolean ret = TRUE;
 
     GST_OBJECT_LOCK(sink);
 
@@ -354,21 +375,24 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
     use_dmabuf = gst_caps_features_contains(gst_caps_get_features(caps, 0), GST_CAPS_FEATURE_MEMORY_DMABUF);
     if (use_dmabuf == FALSE)
     {
-        GST_DEBUG_OBJECT(sink, "not support non dma buffer case");
-        return FALSE;
+        GST_ERROR_OBJECT(sink, "not support non dma buffer case");
+        ret = FALSE;
+        goto done;
     }
 
     /* extract info from caps */
     if (!gst_video_info_from_caps(&sink_priv->video_info, caps))
     {
         GST_ERROR_OBJECT(sink, "can't get video info from caps");
-        return FALSE;
+        ret = FALSE;
+        goto done;
     }
 
     sink_priv->video_info_changed = TRUE;
 
+done:
     GST_OBJECT_UNLOCK(sink);
-    return TRUE;
+    return ret;
 }
 
 static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffer *buffer)

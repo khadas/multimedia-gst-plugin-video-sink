@@ -368,7 +368,7 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
 {
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(bsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
-    gboolean use_dmabuf;
+    // gboolean use_dmabuf;
     gboolean ret = TRUE;
 
     GST_OBJECT_LOCK(sink);
@@ -447,7 +447,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         goto error;
     }
 
-    if (!render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap))
+    if (render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == -1)
     {
         GST_ERROR_OBJECT(sink, "render lib: display frame fail");
         goto error;
@@ -608,14 +608,16 @@ int gst_render_val_callback(void *userData, int key, void *value)
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap)
 {
     // only support dma buf
-    RenderDmaBuffer *dmabuf = tunnel_lib_buf_wrap->dma;
+    RenderDmaBuffer *dmabuf = &tunnel_lib_buf_wrap->dma;
     GstMemory *dma_mem = NULL;
     GstVideoMeta *vmeta = NULL;
     guint n_mem = 0;
+    gboolean ret = TRUE;
 
     if (gst_buf == NULL || tunnel_lib_buf_wrap == NULL || dmabuf == NULL)
     {
         GST_ERROR_OBJECT(vsink, "input params error");
+        ret = FALSE;
         goto error;
     }
     n_mem = gst_buffer_n_memory(gst_buf);
@@ -623,6 +625,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
     if(vmeta == NULL)
     {
         GST_ERROR_OBJECT(vsink, "not found video meta info");
+        ret = FALSE;
         goto error;
     }
     if (n_mem > RENDER_MAX_PLANES || vmeta->n_planes > RENDER_MAX_PLANES || n_mem != vmeta->n_planes)
@@ -635,14 +638,22 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
     dmabuf->planeCnt = n_mem;
     dmabuf->width = vmeta->width;
     dmabuf->height = vmeta->height;
+
+    GST_DEBUG_OBJECT(vsink, "dbgjxs, vmeta->width:%d, dmabuf->width:%d", vmeta->width, dmabuf->width);
+
     for (guint i = 0; i < n_mem; i++)
     {
         gint dmafd;
         gsize size, offset, maxsize;
         dma_mem = gst_buffer_peek_memory(gst_buf, i);
+        guint mem_idx = 0;
+        guint length = 0;
+        gsize skip = 0;
+
         if (!gst_is_dmabuf_memory(dma_mem))
         {
             GST_ERROR_OBJECT(vsink, "not support non-dma buf");
+            ret = FALSE;
             goto error;
         }
         size = gst_memory_get_sizes(dma_mem, &offset, &maxsize);
@@ -650,17 +661,31 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         dmabuf->handle[i] = 0;
         dmabuf->fd[i] = dmafd;
         dmabuf->size[i] = dma_mem->size;
-        dmabuf->offset[i] = vmeta->offset[i];
         dmabuf->stride[i] = vmeta->stride[i];
+        if (gst_buffer_find_memory (gst_buf, vmeta->offset[i], 1, &mem_idx, &length, &skip) && mem_idx == i)
+        {
+            dmabuf->offset[i] = dma_mem->offset + skip;
+            GST_DEBUG_OBJECT(vsink, "get skip from buffer:%d, offset[%d]:%d", skip, i, dmabuf->offset[i]);
+        }
+        else
+        {
+            GST_ERROR_OBJECT(vsink, "get skip from buffer error");
+            ret = FALSE;
+            goto error;
+        }
+
+
         GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, handle:%d, fd:%d, size:%d, offset:%d, stride:%d", 
                          i, dmabuf->handle[i], dmabuf->fd[i], dmabuf->size[i], dmabuf->offset[i], dmabuf->stride[i]);
     }
     tunnel_lib_buf_wrap->flag = BUFFER_FLAG_EXTER_DMA_BUFFER;
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
     tunnel_lib_buf_wrap->priv = (void *)gst_buf;
+    
+    return ret;
 
 error:
-    return FALSE;
+    return ret;
 }
 
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
@@ -783,12 +808,12 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
         GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
         return FALSE;
     }
-    if (render_set(sink_priv->render_device_handle, KEY_FRAME_SIZE, &frame_size))
+    if (render_set(sink_priv->render_device_handle, KEY_FRAME_SIZE, &frame_size) == -1)
     {
         GST_ERROR_OBJECT(vsink, "tunnel lib: set frame size error");
         return FALSE;
     }
-    if (render_set(sink_priv->render_device_handle, KEY_VIDEO_FORMAT, &format))
+    if (render_set(sink_priv->render_device_handle, KEY_VIDEO_FORMAT, &format) == -1)
     {
         GST_ERROR_OBJECT(vsink, "tunnel lib: set video format error");
         return FALSE;

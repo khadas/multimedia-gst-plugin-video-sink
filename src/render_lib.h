@@ -9,13 +9,6 @@ extern "C" {
 
 #define RENDER_MAX_PLANES 3
 
-typedef struct _RenderBuffer RenderBuffer;
-typedef struct _RenderWindowSize RenderWindowSize;
-typedef struct _RenderFrameSize RenderFrameSize;
-typedef struct _RenderCallback RenderCallback;
-typedef struct _RenderRawBuffer RenderRawBuffer;
-typedef struct _RenderDmaBuffer RenderDmaBuffer;
-
 /*allocate render buffer flag */
 enum _BufferFlag {
     BUFFER_FLAG_NONE       = 0,
@@ -24,23 +17,12 @@ enum _BufferFlag {
     BUFFER_FLAG_EXTER_DMA_BUFFER    = 1 << 3,
 };
 
-struct _RenderBuffer {
-    int id; //buffer id
-    int flag; /*render buffer flag, see  enum _BufferFlag*/
-    union {
-        RenderDmaBuffer *dma;
-        RenderRawBuffer *raw;
-    };
-    int64_t pts;
-    void *priv;
-};
-
-struct _RenderRawBuffer {
+typedef struct _RenderRawBuffer {
     void *dataPtr;
     int size;
-};
+} RenderRawBuffer;
 
-struct _RenderDmaBuffer {
+typedef struct _RenderDmaBuffer {
     int width;
     int height;
     int planeCnt;
@@ -49,7 +31,18 @@ struct _RenderDmaBuffer {
     uint32_t offset[RENDER_MAX_PLANES];
     uint32_t size[RENDER_MAX_PLANES];
     int fd[RENDER_MAX_PLANES];
-};
+} RenderDmaBuffer;
+
+typedef struct _RenderBuffer {
+    int id; //buffer id
+    int flag; /*render buffer flag, see  enum _BufferFlag*/
+    RenderDmaBuffer dma;
+    RenderRawBuffer raw;
+    int64_t pts;
+    void *priv;
+} RenderBuffer;
+
+
 
 /*render key*/
 enum _RenderKey {
@@ -64,19 +57,19 @@ enum _RenderKey {
 
 /*video display window size
  if will be used by PROP_WINDOW_SIZE prop */
-struct _RenderWindowSize {
+typedef struct _RenderWindowSize {
     int x;
     int y;
     int w;
     int h;
-};
+} RenderWindowSize;
 
 /*frame size info
  it will be used by PROP_UPDATE_FRAME_SIZE prop*/
-struct _RenderFrameSize {
+typedef struct _RenderFrameSize {
     int frameWidth;
     int frameHeight;
-};
+} RenderFrameSize;
 
 typedef enum _RenderMsgType {
     MSG_RELEASE_BUFFER = 100,
@@ -114,10 +107,10 @@ typedef int (*onRenderGet)(void *userData, int key, void *value);
  * @param msg the message of sending
  * @return
  */
-struct _RenderCallback {
+typedef struct _RenderCallback {
     onRenderMsgSend doMsgSend;
     onRenderGet doGetValue;
-};
+} RenderCallback;
 
 /**video format*/
 typedef enum {
@@ -333,10 +326,11 @@ void render_free_render_buffer_wrap(void *handle, RenderBuffer *buffer);
  * @param planecnt the dma buffer plane count
  * @param width video width
  * @param height video height
- * @return RenderDmaBuffer point or NULL if fail
+ * @param dmabuffer  output parma,dmabuffer
+ * @return 0 success, -1 if failed
  *
 */
-RenderDmaBuffer *render_accquire_dma_buffer(void *handle, int planecnt, int width, int height);
+int render_accquire_dma_buffer(void *handle, int planecnt, int width, int height, RenderDmaBuffer *dmabuffer);
 
 /**
  * release dma buffer that allocated from render lib

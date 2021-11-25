@@ -405,6 +405,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     RenderBuffer *tunnel_lib_buf_wrap = NULL;
 
     GST_OBJECT_LOCK(vsink);
+    GST_LOG_OBJECT(sink, "revice buffer:%p, from pool:%p", buffer, buffer->pool);
 
     if (!sink_priv->render_device_handle)
     {
@@ -525,13 +526,15 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
     {
     case MSG_RELEASE_BUFFER:
     {
+        GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib");
         GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
         RenderBuffer *tunnel_lib_buf_wrap = (RenderBuffer *)msg;
         GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->priv;
 
         if (buffer)
         {
-            GST_DEBUG_OBJECT(sink, "GstBuffer:%p rendered", buffer);
+            GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib, buffer:%p, from pool:%p", buffer, buffer->pool);
+            GstMiniObject *mini_obj_buf = GST_MINI_OBJECT_CAST (buffer);
             gst_buffer_unref(buffer);
         }
         else
@@ -620,6 +623,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         ret = FALSE;
         goto error;
     }
+    gst_buffer_ref(gst_buf);
     n_mem = gst_buffer_n_memory(gst_buf);
     vmeta = gst_buffer_get_video_meta (gst_buf);
     if(vmeta == NULL)
@@ -681,6 +685,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
     tunnel_lib_buf_wrap->flag = BUFFER_FLAG_EXTER_DMA_BUFFER;
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
     tunnel_lib_buf_wrap->priv = (void *)gst_buf;
+    GST_DEBUG_OBJECT(vsink, "set tunnel lib buf priv:%p from pool:%p", tunnel_lib_buf_wrap->priv, gst_buf->pool);
     
     return ret;
 

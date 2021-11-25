@@ -1,4 +1,5 @@
 #!/bin/bash
+sync
 echo 1 > /sys/module/amvdec_ports/parameters/multiplanar
 echo 1 > /sys/module/amvdec_ports/parameters/bypass_vpp
 echo 0 > /sys/module/amvdec_ports/parameters/enable_drm_mode

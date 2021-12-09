@@ -12,6 +12,7 @@
 // #define INVALID_SESSION_ID (16)
 #include "gstamlclock.h"
 #include "gstamlhalasink_new.h"
+#include <stdio.h>
 // #endif
 // #endif
 
@@ -214,7 +215,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         gboolean is_mute = g_value_get_boolean(value);
         if (sink_priv->mute != is_mute)
         {
-            sink_priv->fullscreen = is_mute;
+            sink_priv->mute = is_mute;
             //TODO set full screen to tunnel lib
         }
         GST_OBJECT_UNLOCK(sink);
@@ -570,7 +571,7 @@ int gst_render_val_callback(void *userData, int key, void *value)
     gint ret = 0;
     switch (key)
     {
-    case KEY_MEDIASYNC_SYNC_MODE:
+    case KEY_MEDIASYNC_INSTANCE_ID:
     {
         if (gst_get_mediasync_instanceid(vsink))
         {
@@ -695,6 +696,8 @@ error:
 
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
 {
+    GST_DEBUG_OBJECT(vsink, "trace in");
+#if 0
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
     GstElement *asink = gst_aml_video_sink_find_audio_sink(vsink);
     GstClock *amlclock = gst_aml_hal_asink_get_clock((GstElement *)asink);
@@ -715,11 +718,26 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
         ret = FALSE;
     }
     gst_object_unref(asink);
+#else
+    GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
+    gboolean ret = TRUE;
+    FILE * fp;
+    fp = fopen("/data/MediaSyncId", "r");
+    if (fp == NULL) {
+        GST_ERROR_OBJECT(vsink, "could not open file:/data/MediaSyncId failed");
+        ret = FALSE;
+    } else {
+        fread(&sink_priv->mediasync_instanceid, sizeof(int), 1, fp);
+        fclose(fp);
+        GST_DEBUG_OBJECT(vsink, "get mediasync instance id:0x%x", sink_priv->mediasync_instanceid);
+    }
+#endif
     return ret;
 }
 
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
 {
+    GST_DEBUG_OBJECT(sink, "trace in");
     GstElement *audioSink = 0;
     GstElement *pipeline = 0;
     GstElement *element, *elementPrev = 0;
@@ -731,12 +749,14 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
         {
             gst_object_unref(elementPrev);
         }
+        GST_DEBUG_OBJECT(sink, "dbg-0, element:%p, parent:%p", element, gst_element_get_parent(element));
         element = GST_ELEMENT_CAST(gst_element_get_parent(element));
         if (element)
         {
             elementPrev = pipeline;
             pipeline = element;
         }
+        GST_DEBUG_OBJECT(sink, "dbg-1");
     } while (element != 0);
 
     if (pipeline)
@@ -796,6 +816,7 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
 
         gst_object_unref(pipeline);
     }
+    GST_DEBUG_OBJECT(sink, "trace out");
     return audioSink;
 }
 

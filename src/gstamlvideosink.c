@@ -6,7 +6,7 @@
 #include <gst/gstdrmbufferpool.h>
 #include <gst/allocators/gstdmabuf.h>
 #include "gstamlvideosink.h"
-#include "render_lib.h"
+#include <render_lib.h>
 // #ifdef USE_AMLOGIC_MESON
 // #ifdef USE_AMLOGIC_MESON_MSYNC
 // #define INVALID_SESSION_ID (16)

@@ -17,10 +17,11 @@ plugin_LTLIBRARIES = libgstamlvideosink.la
 libgstamlvideosink_la_SOURCES = gstamlvideosink.c
 # compiler and linker flags used to compile this plugin, set in configure.ac
 libgstamlvideosink_la_CFLAGS = $(GST_CFLAGS)
-libgstamlvideosink_la_LIBADD = $(GST_LIBS)
 libgstamlvideosink_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
-libgstamlvsink_la_LIBADD = $(GST_LIBS)
-libgstamlvsink_la_LIBADD += -L$(TARGET_DIR)/usr/lib -L$(TARGET_DIR)/usr/lib/gstreamer-1.0 -lmediahal_videorender 
+
+libgstamlvideosink_la_LIBADD = $(GST_LIBS)
+libgstamlvideosink_la_LIBADD += -L$(TARGET_DIR)/usr/lib  -lmediahal_videorender 
+libgstamlvideosink_la_LIBADD += -L$(TARGET_DIR)/usr/lib/gstreamer-1.0   -lgstamlhalasink -lmediahal_videorender -lgstvideo-1.0 -lgstdrmbufferpool -lgstdrmallocator 
 libgstamlvideosink_la_LIBTOOLFLAGS = --tag=disable-static
 
 # headers we need but don't want installed

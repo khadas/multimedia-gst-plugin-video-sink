@@ -4,7 +4,7 @@ LICENSE = "AMLOGIC"
 LIC_FILES_CHKSUM = "file://${COREBASE}/../meta-meson/license/AMLOGIC;md5=6c70138441c57c9e1edb9fde685bd3c8"
 
 DEPENDS = " gstreamer1.0 gstreamer1.0-plugins-base gst-aml-drmbufferpool-plugins gst-plugin-aml-asink linux-meson aml-mediahal-sdk"
-RDEPENDS_${PN} = " "
+RDEPENDS_${PN} = " aml-mediahal-sdk "
 
 # LDFLAGS_append  = " -lgstamlhalasink -lmediahal_videorender -lgstvideo-1.0 -lgstdrmbufferpool -lgstdrmallocator -L${STAGING_LIBDIR}/gstreamer-1.0 -Wl,-rpath -Wl,/usr/lib/gstreamer-1.0"
 

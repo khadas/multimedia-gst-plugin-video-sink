@@ -60,6 +60,10 @@ enum
 #define RENDER_DEVICE_NAME "wayland"
 #define USE_DMABUF TRUE
 
+#define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY      6
+#define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE    1
+#define DRMBP_UNLIMIT_MAX_BUFSIZE             0
+
 struct _GstAmlVideoSinkPrivate
 {
     gchar *render_device_name;
@@ -332,7 +336,7 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
         //TODO 没有考虑secure场景
         pool = gst_drm_bufferpool_new(FALSE, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
 
-    gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, 2, 2);
+    gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY, DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE);
     if (pool)
         g_object_unref(pool);
 

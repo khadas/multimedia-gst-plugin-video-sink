@@ -165,6 +165,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     gst_pad_set_event_function(basesink->sinkpad, gst_aml_video_sink_pad_event);
     GST_AML_VIDEO_SINK_GET_PRIVATE(sink) = malloc (sizeof(GstAmlVideoSinkPrivate));
     gst_aml_video_sink_reset_private(sink);
+    gst_base_sink_set_sync(basesink, FALSE);
 }
 
 static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
@@ -331,7 +332,7 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
         //TODO 没有考虑secure场景
         pool = gst_drm_bufferpool_new(FALSE, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
 
-    gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, 2, 0);
+    gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, 2, 2);
     if (pool)
         g_object_unref(pool);
 
@@ -530,7 +531,14 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib");
         GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
         RenderBuffer *tunnel_lib_buf_wrap = (RenderBuffer *)msg;
+        RenderDmaBuffer *dmabuf = &tunnel_lib_buf_wrap->dma;
         GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->priv;
+
+        GST_DEBUG_OBJECT(sink, "dbg: buf out:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d", 
+                        tunnel_lib_buf_wrap->priv, 
+                        dmabuf->planeCnt, 
+                        dmabuf->fd[0], 
+                        dmabuf->fd[1]);
 
         if (buffer)
         {
@@ -573,6 +581,7 @@ int gst_render_val_callback(void *userData, int key, void *value)
     {
     case KEY_MEDIASYNC_INSTANCE_ID:
     {
+        // break;
         if (gst_get_mediasync_instanceid(vsink))
         {
             *val = sink_priv->mediasync_instanceid;
@@ -687,6 +696,11 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
     tunnel_lib_buf_wrap->priv = (void *)gst_buf;
     GST_DEBUG_OBJECT(vsink, "set tunnel lib buf priv:%p from pool:%p", tunnel_lib_buf_wrap->priv, gst_buf->pool);
+    GST_DEBUG_OBJECT(vsink, "dbg: buf in:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d", 
+                            tunnel_lib_buf_wrap->priv, 
+                            dmabuf->planeCnt, 
+                            dmabuf->fd[0], 
+                            dmabuf->fd[1]);
     
     return ret;
 

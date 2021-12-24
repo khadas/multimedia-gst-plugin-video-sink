@@ -872,7 +872,13 @@ static gboolean plugin_init(GstPlugin *plugin)
     GST_DEBUG_CATEGORY_INIT(gst_aml_video_sink_debug, "amlvideosink", 0,
                             " aml video sink");
 
-    return gst_element_register(plugin, "amlvideosink", 300,
+    gint rank = 1;
+    const char *rank_env = getenv ("GST_AML_VIDEO_SINK_RANK");
+    if (rank_env) {
+      rank = atoi(rank_env);
+   }
+
+    return gst_element_register(plugin, "amlvideosink", rank,
                                 GST_TYPE_AML_VIDEO_SINK);
 }
 

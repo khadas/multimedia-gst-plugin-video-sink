@@ -60,12 +60,13 @@ enum
 #define RENDER_DEVICE_NAME "wayland"
 #define USE_DMABUF TRUE
 
-#define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY      6
+#define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY      10
 #define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE    1
 #define DRMBP_UNLIMIT_MAX_BUFSIZE             0
 
 struct _GstAmlVideoSinkPrivate
 {
+    GstBuffer *preroll_buffer;
     gchar *render_device_name;
     void *render_device_handle;
     GstVideoInfo video_info;
@@ -411,12 +412,24 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     RenderBuffer *tunnel_lib_buf_wrap = NULL;
 
     GST_OBJECT_LOCK(vsink);
-    GST_LOG_OBJECT(sink, "revice buffer:%p, from pool:%p", buffer, buffer->pool);
+    GST_LOG_OBJECT(sink, "revice buffer:%p, from pool:%p, need_preroll:%d", buffer, buffer->pool, ((GstBaseSink *)sink)->need_preroll);
 
     if (!sink_priv->render_device_handle)
     {
         GST_ERROR_OBJECT(sink, "flow error, render_device_handle == NULL");
         goto error;
+    }
+
+    if (sink_priv->preroll_buffer && sink_priv->preroll_buffer == buffer)
+    {
+        GST_LOG_OBJECT(sink, "get preroll buffer:%p 2nd time, goto done", buffer);
+        sink_priv->preroll_buffer = NULL;
+        goto done;
+    }
+    if (G_UNLIKELY(((GstBaseSink *)sink)->need_preroll))
+    {
+        GST_LOG_OBJECT(sink, "get preroll buffer 1st time, buf:%p", buffer);
+        sink_priv->preroll_buffer = buffer;
     }
 
     // TODO should call tunnel lib flush func

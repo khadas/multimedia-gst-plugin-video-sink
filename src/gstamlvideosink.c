@@ -1,3 +1,28 @@
+/* GStreamer
+ * Copyright (C) 2021 <song.zhao@amlogic.com>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Suite 500,
+ * Boston, MA 02110-1335, USA.
+ */
+/**
+ * SECTION:element-gstamlvideosink
+ *
+ * The gstamlvideosink element call render lib to render video
+ *
+ */
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
@@ -57,6 +82,7 @@ enum
     "RGB16, BGR16, YUY2, YVYU, UYVY, AYUV, NV12, NV21, NV16, "     \
     "YUV9, YVU9, Y41B, I420, YV12, Y42B, v308 }"
 #define GST_CAPS_FEATURE_MEMORY_DMABUF "memory:DMABuf"
+#define GST_USE_PLAYBIN 0
 #define RENDER_DEVICE_NAME "wayland"
 #define USE_DMABUF TRUE
 
@@ -115,7 +141,9 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
 int gst_render_val_callback(void *userData, int key, void *value);
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink);
+#if GST_USE_PLAYBIN
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
+#endif
 static gboolean gst_render_set_params(GstVideoSink *vsink);
 
 /* public interface definition */
@@ -560,7 +588,6 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         if (buffer)
         {
             GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib, buffer:%p, from pool:%p", buffer, buffer->pool);
-            GstMiniObject *mini_obj_buf = GST_MINI_OBJECT_CAST (buffer);
             gst_buffer_unref(buffer);
         }
         else
@@ -688,6 +715,8 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
             goto error;
         }
         size = gst_memory_get_sizes(dma_mem, &offset, &maxsize);
+        GST_LOG_OBJECT(vsink, "get memory size:%d, offeset:%d, maxsize:%d", size, offset, maxsize);
+
         dmafd = gst_dmabuf_memory_get_fd(dma_mem);
         dmabuf->handle[i] = 0;
         dmabuf->fd[i] = dmafd;
@@ -728,7 +757,7 @@ error:
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
 {
     GST_DEBUG_OBJECT(vsink, "trace in");
-#if 0
+#if GST_USE_PLAYBIN
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
     GstElement *asink = gst_aml_video_sink_find_audio_sink(vsink);
     GstClock *amlclock = gst_aml_hal_asink_get_clock((GstElement *)asink);
@@ -758,7 +787,12 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
         GST_ERROR_OBJECT(vsink, "could not open file:/data/MediaSyncId failed");
         ret = FALSE;
     } else {
-        fread(&sink_priv->mediasync_instanceid, sizeof(int), 1, fp);
+        size_t read_size = 0;
+        read_size = fread(&sink_priv->mediasync_instanceid, sizeof(int), 1, fp);
+        if (read_size != sizeof(int))
+        {
+            GST_DEBUG_OBJECT(vsink, "get mediasync instance id read error");
+        }
         fclose(fp);
         GST_DEBUG_OBJECT(vsink, "get mediasync instance id:0x%x", sink_priv->mediasync_instanceid);
     }
@@ -766,6 +800,7 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
     return ret;
 }
 
+#if GST_USE_PLAYBIN
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
 {
     GST_DEBUG_OBJECT(sink, "trace in");
@@ -850,6 +885,7 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
     GST_DEBUG_OBJECT(sink, "trace out");
     return audioSink;
 }
+#endif
 
 static gboolean gst_render_set_params(GstVideoSink *vsink)
 {

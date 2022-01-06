@@ -48,7 +48,7 @@
   GST_DEBUG("dbg basesink ctxt lock | aml | %p | locking", obj); \
   g_mutex_lock(GST_OBJECT_GET_LOCK(obj)); \
   GST_DEBUG("dbg basesink ctxt lock | aml | %p | locked", obj); \
-} 
+}
 #endif
 
 #ifdef GST_OBJECT_UNLOCK
@@ -58,7 +58,7 @@
   GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocking", obj); \
   g_mutex_unlock(GST_OBJECT_GET_LOCK(obj)); \
   GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocked", obj); \
-} 
+}
 #endif
 
 /* signals */
@@ -82,11 +82,11 @@ enum
     "RGB16, BGR16, YUY2, YVYU, UYVY, AYUV, NV12, NV21, NV16, "     \
     "YUV9, YVU9, Y41B, I420, YV12, Y42B, v308 }"
 #define GST_CAPS_FEATURE_MEMORY_DMABUF "memory:DMABuf"
-#define GST_USE_PLAYBIN 0
+#define GST_USE_PLAYBIN 1
 #define RENDER_DEVICE_NAME "wayland"
 #define USE_DMABUF TRUE
 
-#define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY      10
+#define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY      5
 #define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE    1
 #define DRMBP_UNLIMIT_MAX_BUFSIZE             0
 
@@ -99,8 +99,10 @@ struct _GstAmlVideoSinkPrivate
     gboolean video_info_changed;
     gboolean use_dmabuf;
     gboolean is_flushing;
+    gboolean got_eos;
     gint mediasync_instanceid;
     GstSegment segment;
+
     /* property params */
     gboolean fullscreen;
     gboolean mute;
@@ -145,6 +147,8 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink);
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
 #endif
 static gboolean gst_render_set_params(GstVideoSink *vsink);
+static void gst_emit_eos_signal(GstAmlVideoSink *vsink);
+static void gst_wait_eos_signal(GstAmlVideoSink *vsink);
 
 /* public interface definition */
 static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
@@ -195,9 +199,19 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
 {
     GstBaseSink *basesink = (GstBaseSink *)sink;
+
+    /* init eos detect */
+    sink->queued = 0;
+    sink->dequeued = 0;
+    sink->rendered = 0;
+    g_mutex_init (&sink->eos_lock);
+    g_cond_init (&sink->eos_cond);
+
     gst_pad_set_event_function(basesink->sinkpad, gst_aml_video_sink_pad_event);
+
     GST_AML_VIDEO_SINK_GET_PRIVATE(sink) = malloc (sizeof(GstAmlVideoSinkPrivate));
     gst_aml_video_sink_reset_private(sink);
+
     gst_base_sink_set_sync(basesink, FALSE);
 }
 
@@ -265,6 +279,10 @@ static void gst_aml_video_sink_finalize(GObject *object)
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(object);
 
     GST_DEBUG_OBJECT(sink, "Finalizing aml video sink..");
+
+    g_mutex_clear (&sink->eos_lock);
+    g_cond_clear (&sink->eos_cond);
+
     gst_aml_video_sink_reset_private(sink);
     if(GST_AML_VIDEO_SINK_GET_PRIVATE(sink))
         free(GST_AML_VIDEO_SINK_GET_PRIVATE(sink));
@@ -450,9 +468,9 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
 
     if (sink_priv->preroll_buffer && sink_priv->preroll_buffer == buffer)
     {
-        GST_LOG_OBJECT(sink, "get preroll buffer:%p 2nd time, goto done", buffer);
+        GST_LOG_OBJECT(sink, "get preroll buffer:%p 2nd time, goto ret", buffer);
         sink_priv->preroll_buffer = NULL;
-        goto done;
+        goto ret;
     }
     if (G_UNLIKELY(((GstBaseSink *)sink)->need_preroll))
     {
@@ -470,7 +488,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
             goto error;
         }
         GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
-        goto done;
+        goto flushing;
     }
 
     if (sink_priv->video_info_changed)
@@ -495,20 +513,27 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         goto error;
     }
 
+    GST_OBJECT_UNLOCK(vsink);
+
     if (render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == -1)
     {
         GST_ERROR_OBJECT(sink, "render lib: display frame fail");
         goto error;
     }
 
-done:
-    GST_OBJECT_UNLOCK(vsink);
+    sink->queued++;
     GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued ok", buffer);
     return ret;
+
 error:
-    GST_OBJECT_UNLOCK(vsink);
     GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued error", buffer);
     ret = GST_FLOW_CUSTOM_ERROR_2;
+    goto ret;
+flushing:
+    GST_DEBUG_OBJECT(sink, "flushing when buf:%p", buffer);
+    goto ret;
+ret:
+    GST_OBJECT_UNLOCK(vsink);
     return ret;
 }
 
@@ -532,7 +557,13 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     {
         GST_INFO_OBJECT(sink, "flush stop");
 
+        gst_wait_eos_signal(sink);
+
         GST_OBJECT_LOCK(sink);
+        sink->queued = 0;
+        sink->dequeued = 0;
+        sink->rendered = 0;
+        sink_priv->got_eos = FALSE;
         sink_priv->is_flushing = FALSE;
         GST_OBJECT_UNLOCK(sink);
         break;
@@ -545,6 +576,14 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         //TODO set play rate to tunnel lib, 切换rate这部分是不是只需要audio那边set即可
         GST_OBJECT_UNLOCK(sink);
         break;
+    }
+    case GST_EVENT_EOS:
+    {
+        GST_OBJECT_LOCK(sink);
+        sink_priv->got_eos = TRUE;
+        GST_OBJECT_UNLOCK(sink);
+
+        gst_wait_eos_signal(sink);
     }
     default:
     {
@@ -571,28 +610,50 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
     GstAmlVideoSink *sink = (GstAmlVideoSink *)userData;
     switch (type)
     {
+    case MSG_DISPLAYED_BUFFER:
+    {
+        GST_LOG_OBJECT(sink, "get message: MSG_DISPLAYED_BUFFER from tunnel lib");
+        GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+        RenderBuffer *tunnel_lib_buf_wrap = (RenderBuffer *)msg;
+        RenderDmaBuffer *dmabuf = &tunnel_lib_buf_wrap->dma;
+        GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->priv;
+        if (buffer)
+        {
+            sink->rendered++;
+            if ((sink_priv->got_eos || sink_priv->is_flushing) && sink->queued == sink->rendered)
+            {
+                gst_emit_eos_signal(sink);
+            }
+        }
+        else
+        {
+            GST_ERROR_OBJECT(sink, "tunnel lib: return void GstBuffer when MSG_DISPLAYED_BUFFER");
+        }
+
+        GST_DEBUG_OBJECT(sink, "buf out:%p\n\
+                                planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d\n\
+                                pts:%lld, buf stat | queued:%d, dequeued:%d, rendered:%d",
+                        buffer,
+                        dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
+                        buffer? GST_BUFFER_PTS(buffer):-1, sink->queued, sink->dequeued, sink->rendered);
+        break;
+    }
     case MSG_RELEASE_BUFFER:
     {
         GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib");
         GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
         RenderBuffer *tunnel_lib_buf_wrap = (RenderBuffer *)msg;
-        RenderDmaBuffer *dmabuf = &tunnel_lib_buf_wrap->dma;
         GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->priv;
-
-        GST_DEBUG_OBJECT(sink, "dbg: buf out:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d", 
-                        tunnel_lib_buf_wrap->priv, 
-                        dmabuf->planeCnt, 
-                        dmabuf->fd[0], 
-                        dmabuf->fd[1]);
 
         if (buffer)
         {
-            GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib, buffer:%p, from pool:%p", buffer, buffer->pool);
+            GST_DEBUG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib, buffer:%p, from pool:%p", buffer, buffer->pool);
             gst_buffer_unref(buffer);
+            sink->dequeued++;
         }
         else
         {
-            GST_ERROR_OBJECT(sink, "tunnel lib: return void GstBuffer");
+            GST_ERROR_OBJECT(sink, "tunnel lib: return void GstBuffer when MSG_RELEASE_BUFFER");
         }
         render_free_render_buffer_wrap(sink_priv->render_device_handle, tunnel_lib_buf_wrap);
         break;
@@ -760,6 +821,11 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
 #if GST_USE_PLAYBIN
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
     GstElement *asink = gst_aml_video_sink_find_audio_sink(vsink);
+    if (!asink)
+    {
+        GST_DEBUG_OBJECT(vsink, "pipeline don't have audio sink element");
+        return FALSE;
+    }
     GstClock *amlclock = gst_aml_hal_asink_get_clock((GstElement *)asink);
     gboolean ret = TRUE;
     if (amlclock)
@@ -800,6 +866,23 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
     return ret;
 }
 
+static void gst_emit_eos_signal(GstAmlVideoSink *vsink)
+{
+    GST_DEBUG_OBJECT(vsink, "emit eos signal");
+    g_mutex_lock(&vsink->eos_lock);
+    g_cond_signal (&vsink->eos_cond);
+    g_mutex_unlock(&vsink->eos_lock);
+}
+
+static void gst_wait_eos_signal(GstAmlVideoSink *vsink)
+{
+    GST_DEBUG_OBJECT(vsink, "waitting eos signal");
+    g_mutex_lock(&vsink->eos_lock);
+    g_cond_wait (&vsink->eos_cond, &vsink->eos_lock);
+    g_mutex_unlock(&vsink->eos_lock);
+    GST_DEBUG_OBJECT(vsink, "waitted eos signal");
+}
+
 #if GST_USE_PLAYBIN
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
 {
@@ -815,14 +898,13 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
         {
             gst_object_unref(elementPrev);
         }
-        GST_DEBUG_OBJECT(sink, "dbg-0, element:%p, parent:%p", element, gst_element_get_parent(element));
+        //TODO use this func will ref elment，but when unref these element？
         element = GST_ELEMENT_CAST(gst_element_get_parent(element));
         if (element)
         {
             elementPrev = pipeline;
             pipeline = element;
         }
-        GST_DEBUG_OBJECT(sink, "dbg-1");
     } while (element != 0);
 
     if (pipeline)
@@ -882,7 +964,7 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
 
         gst_object_unref(pipeline);
     }
-    GST_DEBUG_OBJECT(sink, "trace out");
+    GST_DEBUG_OBJECT(sink, "trace out get audioSink:%p", audioSink);
     return audioSink;
 }
 #endif
@@ -893,14 +975,14 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstVideoInfo *video_info = &(sink_priv->video_info);
 
-    RenderWindowSize window_size = {0, 0, video_info->width, video_info->height};
+    // RenderWindowSize window_size = {0, 0, video_info->width, video_info->height};
     RenderFrameSize frame_size = {video_info->width, video_info->height};
     GstVideoFormat format = video_info->finfo? video_info->finfo->format : GST_VIDEO_FORMAT_UNKNOWN;
-    if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
-    {
-        GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
-        return FALSE;
-    }
+    // if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
+    // {
+    //     GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
+    //     return FALSE;
+    // }
     if (render_set(sink_priv->render_device_handle, KEY_FRAME_SIZE, &frame_size) == -1)
     {
         GST_ERROR_OBJECT(vsink, "tunnel lib: set frame size error");

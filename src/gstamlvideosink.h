@@ -47,6 +47,14 @@ typedef struct _GstAmlVideoSinkPrivate GstAmlVideoSinkPrivate;
 struct _GstAmlVideoSink
 {
   GstVideoSink parent;
+
+  /* eos detect */
+  gint queued;
+  gint dequeued;
+  gint rendered;
+  GMutex eos_lock;
+  GCond eos_cond;
+
   GstAmlVideoSinkPrivate *priv;
 };
 

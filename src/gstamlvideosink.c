@@ -77,10 +77,12 @@ enum
 
 };
 
-#define AML_VIDEO_FORMATS                                          \
-    "{ BGRx, BGRA, RGBx, xBGR, xRGB, RGBA, ABGR, ARGB, RGB, BGR, " \
-    "RGB16, BGR16, YUY2, YVYU, UYVY, AYUV, NV12, NV21, NV16, "     \
-    "YUV9, YVU9, Y41B, I420, YV12, Y42B, v308 }"
+// #define AML_VIDEO_FORMATS                                          \
+//     "{ BGRx, BGRA, RGBx, xBGR, xRGB, RGBA, ABGR, ARGB, RGB, BGR, " \
+//     "RGB16, BGR16, YUY2, YVYU, UYVY, AYUV, NV12, NV21, NV16, "     \
+//     "YUV9, YVU9, Y41B, I420, YV12, Y42B, v308 }"
+#define AML_VIDEO_FORMATS "{ NV21 }"
+
 #define GST_CAPS_FEATURE_MEMORY_DMABUF "memory:DMABuf"
 #define GST_USE_PLAYBIN 1
 #define RENDER_DEVICE_NAME "wayland"

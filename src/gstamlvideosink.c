@@ -43,22 +43,22 @@
 
 #ifdef GST_OBJECT_LOCK
 #undef GST_OBJECT_LOCK
-#define GST_OBJECT_LOCK(obj) \
-{ \
-  GST_DEBUG("dbg basesink ctxt lock | aml | %p | locking", obj); \
-  g_mutex_lock(GST_OBJECT_GET_LOCK(obj)); \
-  GST_DEBUG("dbg basesink ctxt lock | aml | %p | locked", obj); \
-}
+#define GST_OBJECT_LOCK(obj)                                           \
+    {                                                                  \
+        GST_DEBUG("dbg basesink ctxt lock | aml | %p | locking", obj); \
+        g_mutex_lock(GST_OBJECT_GET_LOCK(obj));                        \
+        GST_DEBUG("dbg basesink ctxt lock | aml | %p | locked", obj);  \
+    }
 #endif
 
 #ifdef GST_OBJECT_UNLOCK
 #undef GST_OBJECT_UNLOCK
-#define GST_OBJECT_UNLOCK(obj) \
-{ \
-  GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocking", obj); \
-  g_mutex_unlock(GST_OBJECT_GET_LOCK(obj)); \
-  GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocked", obj); \
-}
+#define GST_OBJECT_UNLOCK(obj)                                          \
+    {                                                                   \
+        GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocking", obj); \
+        g_mutex_unlock(GST_OBJECT_GET_LOCK(obj));                       \
+        GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocked", obj);  \
+    }
 #endif
 
 /* signals */
@@ -74,7 +74,7 @@ enum
     PROP_0,
     PROP_FULLSCREEN,
     PROP_SETMUTE,
-
+    PROP_AVSYNC_MODE,
 };
 
 // #define AML_VIDEO_FORMATS                                          \
@@ -85,12 +85,14 @@ enum
 
 #define GST_CAPS_FEATURE_MEMORY_DMABUF "memory:DMABuf"
 #define GST_USE_PLAYBIN 1
+#define GST_DEFAULT_AVSYNC_MODE 0
+
 #define RENDER_DEVICE_NAME "wayland"
 #define USE_DMABUF TRUE
 
-#define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY      5
-#define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE    1
-#define DRMBP_UNLIMIT_MAX_BUFSIZE             0
+#define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY 5
+#define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE 1
+#define DRMBP_UNLIMIT_MAX_BUFSIZE 0
 
 struct _GstAmlVideoSinkPrivate
 {
@@ -196,6 +198,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
         g_param_spec_boolean("set mute", "set mute params",
                              "Whether set screen mute ",
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+    g_object_class_install_property(
+        G_OBJECT_CLASS(klass), PROP_AVSYNC_MODE,
+        g_param_spec_int("avsync-mode", "avsync mode",
+                         "Vmaster(0) Amaster(1) PCRmaster(2) IPTV(3) FreeRun(4)",
+                         G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
 }
 
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
@@ -206,12 +214,13 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->queued = 0;
     sink->dequeued = 0;
     sink->rendered = 0;
-    g_mutex_init (&sink->eos_lock);
-    g_cond_init (&sink->eos_cond);
+    sink->avsync_mode = GST_DEFAULT_AVSYNC_MODE;
+    g_mutex_init(&sink->eos_lock);
+    g_cond_init(&sink->eos_cond);
 
     gst_pad_set_event_function(basesink->sinkpad, gst_aml_video_sink_pad_event);
 
-    GST_AML_VIDEO_SINK_GET_PRIVATE(sink) = malloc (sizeof(GstAmlVideoSinkPrivate));
+    GST_AML_VIDEO_SINK_GET_PRIVATE(sink) = malloc(sizeof(GstAmlVideoSinkPrivate));
     gst_aml_video_sink_reset_private(sink);
 
     gst_base_sink_set_sync(basesink, FALSE);
@@ -235,6 +244,11 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         g_value_set_boolean(value, sink_priv->mute);
         GST_OBJECT_UNLOCK(sink);
         break;
+    case PROP_AVSYNC_MODE:
+        GST_OBJECT_LOCK(sink);
+        g_value_set_boolean(value, sink->avsync_mode);
+        GST_OBJECT_UNLOCK(sink);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -256,7 +270,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         if (sink_priv->fullscreen != is_fullscreen)
         {
             sink_priv->fullscreen = is_fullscreen;
-            //TODO set full screen to tunnel lib
+            // TODO set full screen to tunnel lib
         }
         GST_OBJECT_UNLOCK(sink);
         break;
@@ -266,7 +280,17 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         if (sink_priv->mute != is_mute)
         {
             sink_priv->mute = is_mute;
-            //TODO set full screen to tunnel lib
+            // TODO set full screen to tunnel lib
+        }
+        GST_OBJECT_UNLOCK(sink);
+        break;
+    case PROP_AVSYNC_MODE:
+        GST_OBJECT_LOCK(sink);
+        gint mode = g_value_get_int(value);
+        if (mode >= 0)
+        {
+            sink->avsync_mode = mode;
+            GST_WARNING("AV sync mode %d", mode);
         }
         GST_OBJECT_UNLOCK(sink);
         break;
@@ -282,11 +306,11 @@ static void gst_aml_video_sink_finalize(GObject *object)
 
     GST_DEBUG_OBJECT(sink, "Finalizing aml video sink..");
 
-    g_mutex_clear (&sink->eos_lock);
-    g_cond_clear (&sink->eos_cond);
+    g_mutex_clear(&sink->eos_lock);
+    g_cond_clear(&sink->eos_cond);
 
     gst_aml_video_sink_reset_private(sink);
-    if(GST_AML_VIDEO_SINK_GET_PRIVATE(sink))
+    if (GST_AML_VIDEO_SINK_GET_PRIVATE(sink))
         free(GST_AML_VIDEO_SINK_GET_PRIVATE(sink));
     G_OBJECT_CLASS(parent_class)->finalize(object);
 }
@@ -370,7 +394,7 @@ error:
 static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQuery *query)
 {
     GST_DEBUG_OBJECT(bsink, "trace in");
-    //TODO only implement dma case
+    // TODO only implement dma case
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(bsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
 
@@ -382,7 +406,7 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
     GST_DEBUG_OBJECT(bsink, "jxsaaa need_pool:%d", need_pool);
 
     if (need_pool)
-        //TODO 没有考虑secure场景
+        // TODO 没有考虑secure场景
         pool = gst_drm_bufferpool_new(FALSE, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
 
     gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY, DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE);
@@ -575,7 +599,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         GST_OBJECT_LOCK(sink);
         gst_event_copy_segment(event, &sink_priv->segment);
         GST_INFO_OBJECT(sink, "configured segment %" GST_SEGMENT_FORMAT, &sink_priv->segment);
-        //TODO set play rate to tunnel lib, 切换rate这部分是不是只需要audio那边set即可
+        // TODO set play rate to tunnel lib, 切换rate这部分是不是只需要audio那边set即可
         GST_OBJECT_UNLOCK(sink);
         break;
     }
@@ -635,9 +659,9 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         GST_DEBUG_OBJECT(sink, "buf out:%p\n\
                                 planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d\n\
                                 pts:%lld, buf stat | queued:%d, dequeued:%d, rendered:%d",
-                        buffer,
-                        dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
-                        buffer? GST_BUFFER_PTS(buffer):-1, sink->queued, sink->dequeued, sink->rendered);
+                         buffer,
+                         dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
+                         buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->rendered);
         break;
     }
     case MSG_RELEASE_BUFFER:
@@ -688,7 +712,11 @@ int gst_render_val_callback(void *userData, int key, void *value)
     {
     case KEY_MEDIASYNC_INSTANCE_ID:
     {
-        // break;
+        if (render_set(sink_priv->render_device_handle, KEY_MEDIASYNC_SYNC_MODE, (void *)&vsink->avsync_mode) == -1)
+        {
+            GST_ERROR_OBJECT(vsink, "tunnel lib: set syncmode error");
+            ret = -1;
+        }
         if (gst_get_mediasync_instanceid(vsink))
         {
             *val = sink_priv->mediasync_instanceid;
@@ -696,14 +724,14 @@ int gst_render_val_callback(void *userData, int key, void *value)
         }
         else
         {
-            GST_ERROR_OBJECT(vsink, "can't get mediasync instance id");
+            GST_ERROR_OBJECT(vsink, "can't get mediasync instance id, use vmaster");
             ret = -1;
         }
         break;
     }
     case KEY_VIDEO_FORMAT:
     {
-        if(sink_priv->video_info.finfo != NULL)
+        if (sink_priv->video_info.finfo != NULL)
         {
             *val = sink_priv->video_info.finfo->format;
             GST_DEBUG_OBJECT(vsink, "get video format:%d", *val);
@@ -742,8 +770,8 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
     }
     gst_buffer_ref(gst_buf);
     n_mem = gst_buffer_n_memory(gst_buf);
-    vmeta = gst_buffer_get_video_meta (gst_buf);
-    if(vmeta == NULL)
+    vmeta = gst_buffer_get_video_meta(gst_buf);
+    if (vmeta == NULL)
     {
         GST_ERROR_OBJECT(vsink, "not found video meta info");
         ret = FALSE;
@@ -755,7 +783,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         goto error;
     }
     GST_DEBUG_OBJECT(vsink, "dbg3-0, dmabuf:%p", dmabuf);
-    
+
     dmabuf->planeCnt = n_mem;
     dmabuf->width = vmeta->width;
     dmabuf->height = vmeta->height;
@@ -785,7 +813,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         dmabuf->fd[i] = dmafd;
         dmabuf->size[i] = dma_mem->size;
         dmabuf->stride[i] = vmeta->stride[i];
-        if (gst_buffer_find_memory (gst_buf, vmeta->offset[i], 1, &mem_idx, &length, &skip) && mem_idx == i)
+        if (gst_buffer_find_memory(gst_buf, vmeta->offset[i], 1, &mem_idx, &length, &skip) && mem_idx == i)
         {
             dmabuf->offset[i] = dma_mem->offset + skip;
             GST_DEBUG_OBJECT(vsink, "get skip from buffer:%d, offset[%d]:%d", skip, i, dmabuf->offset[i]);
@@ -797,20 +825,19 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
             goto error;
         }
 
-
-        GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, handle:%d, fd:%d, size:%d, offset:%d, stride:%d", 
+        GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, handle:%d, fd:%d, size:%d, offset:%d, stride:%d",
                          i, dmabuf->handle[i], dmabuf->fd[i], dmabuf->size[i], dmabuf->offset[i], dmabuf->stride[i]);
     }
     tunnel_lib_buf_wrap->flag = BUFFER_FLAG_EXTER_DMA_BUFFER;
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
     tunnel_lib_buf_wrap->priv = (void *)gst_buf;
     GST_DEBUG_OBJECT(vsink, "set tunnel lib buf priv:%p from pool:%p", tunnel_lib_buf_wrap->priv, gst_buf->pool);
-    GST_DEBUG_OBJECT(vsink, "dbg: buf in:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d", 
-                            tunnel_lib_buf_wrap->priv, 
-                            dmabuf->planeCnt, 
-                            dmabuf->fd[0], 
-                            dmabuf->fd[1]);
-    
+    GST_DEBUG_OBJECT(vsink, "dbg: buf in:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d",
+                     tunnel_lib_buf_wrap->priv,
+                     dmabuf->planeCnt,
+                     dmabuf->fd[0],
+                     dmabuf->fd[1]);
+
     return ret;
 
 error:
@@ -849,12 +876,15 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
 #else
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
     gboolean ret = TRUE;
-    FILE * fp;
+    FILE *fp;
     fp = fopen("/data/MediaSyncId", "r");
-    if (fp == NULL) {
+    if (fp == NULL)
+    {
         GST_ERROR_OBJECT(vsink, "could not open file:/data/MediaSyncId failed");
         ret = FALSE;
-    } else {
+    }
+    else
+    {
         size_t read_size = 0;
         read_size = fread(&sink_priv->mediasync_instanceid, sizeof(int), 1, fp);
         if (read_size != sizeof(int))
@@ -872,7 +902,7 @@ static void gst_emit_eos_signal(GstAmlVideoSink *vsink)
 {
     GST_DEBUG_OBJECT(vsink, "emit eos signal");
     g_mutex_lock(&vsink->eos_lock);
-    g_cond_signal (&vsink->eos_cond);
+    g_cond_signal(&vsink->eos_cond);
     g_mutex_unlock(&vsink->eos_lock);
 }
 
@@ -880,7 +910,7 @@ static void gst_wait_eos_signal(GstAmlVideoSink *vsink)
 {
     GST_DEBUG_OBJECT(vsink, "waitting eos signal");
     g_mutex_lock(&vsink->eos_lock);
-    g_cond_wait (&vsink->eos_cond, &vsink->eos_lock);
+    g_cond_wait(&vsink->eos_cond, &vsink->eos_lock);
     g_mutex_unlock(&vsink->eos_lock);
     GST_DEBUG_OBJECT(vsink, "waitted eos signal");
 }
@@ -900,7 +930,7 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
         {
             gst_object_unref(elementPrev);
         }
-        //TODO use this func will ref elment，but when unref these element？
+        // TODO use this func will ref elment，but when unref these element？
         element = GST_ELEMENT_CAST(gst_element_get_parent(element));
         if (element)
         {
@@ -976,15 +1006,21 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstVideoInfo *video_info = &(sink_priv->video_info);
+    int tunnelmode = 1; //1 for tunnel mode; 0 for non-tunnel mode
 
     // RenderWindowSize window_size = {0, 0, video_info->width, video_info->height};
     RenderFrameSize frame_size = {video_info->width, video_info->height};
-    GstVideoFormat format = video_info->finfo? video_info->finfo->format : GST_VIDEO_FORMAT_UNKNOWN;
+    GstVideoFormat format = video_info->finfo ? video_info->finfo->format : GST_VIDEO_FORMAT_UNKNOWN;
     // if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
     // {
     //     GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
     //     return FALSE;
     // }
+    if (render_set(sink_priv->render_device_handle, KEY_MEDIASYNC_TUNNEL_MODE, (void *)&tunnelmode) == -1)
+    {
+        GST_ERROR_OBJECT(vsink, "tunnel lib: set tunnelmode error");
+        return FALSE;
+    }
     if (render_set(sink_priv->render_device_handle, KEY_FRAME_SIZE, &frame_size) == -1)
     {
         GST_ERROR_OBJECT(vsink, "tunnel lib: set frame size error");
@@ -1006,10 +1042,11 @@ static gboolean plugin_init(GstPlugin *plugin)
                             " aml video sink");
 
     gint rank = 1;
-    const char *rank_env = getenv ("GST_AML_VIDEO_SINK_RANK");
-    if (rank_env) {
-      rank = atoi(rank_env);
-   }
+    const char *rank_env = getenv("GST_AML_VIDEO_SINK_RANK");
+    if (rank_env)
+    {
+        rank = atoi(rank_env);
+    }
 
     return gst_element_register(plugin, "amlvideosink", rank,
                                 GST_TYPE_AML_VIDEO_SINK);
@@ -1030,8 +1067,8 @@ static gboolean plugin_init(GstPlugin *plugin)
 // GST_PLUGIN_DEFINE(GST_VERSION_MAJOR, GST_VERSION_MINOR, amlvideosink,
 //                   "aml Video Sink", plugin_init, VERSION, "LGPL",
 //                   "gst-plugin-video-sink", "")
-GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
-    GST_VERSION_MINOR,
-    amlvideosink,
-    "Amlogic plugin for video decoding/rendering",
-    plugin_init, VERSION, "LGPL", PACKAGE_NAME, GST_PACKAGE_ORIGIN)
+GST_PLUGIN_DEFINE(GST_VERSION_MAJOR,
+                  GST_VERSION_MINOR,
+                  amlvideosink,
+                  "Amlogic plugin for video decoding/rendering",
+                  plugin_init, VERSION, "LGPL", PACKAGE_NAME, GST_PACKAGE_ORIGIN)

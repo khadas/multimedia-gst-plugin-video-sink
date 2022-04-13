@@ -682,11 +682,11 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
                          buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->rendered);
         break;
     }
-    case MSG_DROPED_BUFFER:
-    {
-        GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
-        sink->droped++;
-    }
+    // case MSG_DROPED_BUFFER:
+    // {
+    //     GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
+    //     sink->droped++;
+    // }
     case MSG_RELEASE_BUFFER:
     {
         GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib");

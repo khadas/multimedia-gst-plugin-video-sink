@@ -75,6 +75,7 @@ enum
     PROP_FULLSCREEN,
     PROP_SETMUTE,
     PROP_AVSYNC_MODE,
+    PROP_VIDEO_FRAME_DROP_NUM,
 };
 
 // #define AML_VIDEO_FORMATS                                          \
@@ -204,6 +205,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
         g_param_spec_int("avsync-mode", "avsync mode",
                          "Vmaster(0) Amaster(1) PCRmaster(2) IPTV(3) FreeRun(4)",
                          G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
+
+   g_object_class_install_property (
+       G_OBJECT_CLASS (klass), PROP_VIDEO_FRAME_DROP_NUM,
+       g_param_spec_int ("frames-dropped", "frames-dropped",
+           "number of dropped frames",
+           0, G_MAXINT32, 0, G_PARAM_READABLE));
 }
 
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
@@ -214,6 +221,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->queued = 0;
     sink->dequeued = 0;
     sink->rendered = 0;
+    sink->droped = 0;
     sink->avsync_mode = GST_DEFAULT_AVSYNC_MODE;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
@@ -249,6 +257,11 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         g_value_set_boolean(value, sink->avsync_mode);
         GST_OBJECT_UNLOCK(sink);
         break;
+      case PROP_VIDEO_FRAME_DROP_NUM:
+        GST_OBJECT_LOCK(sink);
+        g_value_set_int(value, sink->droped);
+        GST_OBJECT_UNLOCK(sink);
+         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -589,6 +602,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         sink->queued = 0;
         sink->dequeued = 0;
         sink->rendered = 0;
+        sink->droped = 0;
         sink_priv->got_eos = FALSE;
         sink_priv->is_flushing = FALSE;
         GST_OBJECT_UNLOCK(sink);
@@ -609,7 +623,11 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         sink_priv->got_eos = TRUE;
         GST_OBJECT_UNLOCK(sink);
 
-        gst_wait_eos_signal(sink);
+        if (sink->queued > sink->rendered + sink->droped)
+        {
+            GST_DEBUG_OBJECCT(sink, "need waitting display render all buf");
+            gst_wait_eos_signal(sink);
+        }
     }
     default:
     {
@@ -646,7 +664,7 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         if (buffer)
         {
             sink->rendered++;
-            if ((sink_priv->got_eos || sink_priv->is_flushing) && sink->queued == sink->rendered)
+            if ((sink_priv->got_eos || sink_priv->is_flushing) && sink->queued == sink->rendered + sink->droped)
             {
                 gst_emit_eos_signal(sink);
             }
@@ -663,6 +681,11 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
                          dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
                          buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->rendered);
         break;
+    }
+    case MSG_DROPED_BUFFER:
+    {
+        GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
+        sink->droped++;
     }
     case MSG_RELEASE_BUFFER:
     {

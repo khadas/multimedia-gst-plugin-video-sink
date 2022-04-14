@@ -22,6 +22,7 @@
 
 #include <gst/gst.h>
 #include <gst/video/video.h>
+#include "aml_version.h"
 
 G_BEGIN_DECLS
 

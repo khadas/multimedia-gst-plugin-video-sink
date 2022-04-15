@@ -625,7 +625,10 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
 
         if (sink->queued > sink->rendered + sink->droped)
         {
-            GST_DEBUG_OBJECCT(sink, "need waitting display render all buf");
+            GST_DEBUG_OBJECT(sink, "need waitting display render all buf, queued:%d, rendered:%d, droped:%d", 
+                            sink->queued, 
+                            sink->rendered, 
+                            sink->droped);
             gst_wait_eos_signal(sink);
         }
     }
@@ -685,6 +688,7 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
     // case MSG_DROPED_BUFFER:
     // {
     //     GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
+    //     printf("gst amlvideosink : get message: MSG_DROPED_BUFFER from tunnel lib\n");
     //     sink->droped++;
     // }
     case MSG_RELEASE_BUFFER:

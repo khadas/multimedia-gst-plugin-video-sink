@@ -135,6 +135,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
 static void gst_aml_video_sink_finalize(GObject *object);
 static GstStateChangeReturn
 gst_aml_video_sink_change_state(GstElement *element, GstStateChange transition);
+static gboolean gst_aml_video_sink_query(GstElement *element, GstQuery *query);
 static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQuery *query);
 static GstCaps *gst_aml_video_sink_get_caps(GstBaseSink *bsink,
                                             GstCaps *filter);
@@ -179,8 +180,9 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
         "Output to video tunnel lib",
         "Xuesong.Jiang@amlogic.com<Xuesong.Jiang@amlogic.com>");
 
-    gstelement_class->change_state =
-        GST_DEBUG_FUNCPTR(gst_aml_video_sink_change_state);
+    gstelement_class->change_state = GST_DEBUG_FUNCPTR(gst_aml_video_sink_change_state);
+    gstelement_class->query = GST_DEBUG_FUNCPTR(gst_aml_video_sink_query);
+    ;
 
     gstbasesink_class->propose_allocation = GST_DEBUG_FUNCPTR(gst_aml_video_sink_propose_allocation);
     gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR(gst_aml_video_sink_get_caps);
@@ -206,17 +208,18 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                          "Vmaster(0) Amaster(1) PCRmaster(2) IPTV(3) FreeRun(4)",
                          G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
 
-   g_object_class_install_property (
-       G_OBJECT_CLASS (klass), PROP_VIDEO_FRAME_DROP_NUM,
-       g_param_spec_int ("frames-dropped", "frames-dropped",
-           "number of dropped frames",
-           0, G_MAXINT32, 0, G_PARAM_READABLE));
+    g_object_class_install_property(
+        G_OBJECT_CLASS(klass), PROP_VIDEO_FRAME_DROP_NUM,
+        g_param_spec_int("frames-dropped", "frames-dropped",
+                         "number of dropped frames",
+                         0, G_MAXINT32, 0, G_PARAM_READABLE));
 }
 
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
 {
     GstBaseSink *basesink = (GstBaseSink *)sink;
 
+    sink->last_displayed_buf_pts = 0;
     /* init eos detect */
     sink->queued = 0;
     sink->dequeued = 0;
@@ -257,11 +260,11 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         g_value_set_boolean(value, sink->avsync_mode);
         GST_OBJECT_UNLOCK(sink);
         break;
-      case PROP_VIDEO_FRAME_DROP_NUM:
+    case PROP_VIDEO_FRAME_DROP_NUM:
         GST_OBJECT_LOCK(sink);
         g_value_set_int(value, sink->droped);
         GST_OBJECT_UNLOCK(sink);
-         break;
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -402,6 +405,36 @@ error:
     GST_OBJECT_UNLOCK(sink);
     ret = GST_STATE_CHANGE_FAILURE;
     return ret;
+}
+
+static gboolean gst_aml_video_sink_query(GstElement *element, GstQuery *query)
+{
+    GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(element);
+
+    switch (GST_QUERY_TYPE(query))
+    {
+    case GST_QUERY_POSITION:
+    {
+        GstFormat format;
+        gst_query_parse_position(query, &format, NULL);
+        if (GST_FORMAT_BYTES == format)
+        {
+            return GST_ELEMENT_CLASS(parent_class)->query(element, query);
+        }
+        else
+        {
+            GST_OBJECT_LOCK(sink);
+            gint64 position = sink->last_displayed_buf_pts;
+            GST_OBJECT_UNLOCK(sink);
+            GST_LOG_OBJECT(sink, "got position: %" GST_TIME_FORMAT, GST_TIME_ARGS(position));
+            gst_query_set_position(query, GST_FORMAT_TIME, position);
+            return TRUE;
+        }
+        break;
+    }
+    default:
+        return GST_ELEMENT_CLASS(parent_class)->query(element, query);
+    }
 }
 
 static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQuery *query)
@@ -595,8 +628,15 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     case GST_EVENT_FLUSH_STOP:
     {
         GST_INFO_OBJECT(sink, "flush stop");
-
-        gst_wait_eos_signal(sink);
+        GST_DEBUG_OBJECT(sink, "flushing need waitting display render all buf, queued:%d, rendered:%d, droped:%d",
+                         sink->queued,
+                         sink->rendered,
+                         sink->droped);
+        // gst_wait_eos_signal(sink);
+        if (sink->queued > sink->rendered + sink->droped)
+        {
+            gst_wait_eos_signal(sink);
+        }
 
         GST_OBJECT_LOCK(sink);
         sink->queued = 0;
@@ -625,10 +665,10 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
 
         if (sink->queued > sink->rendered + sink->droped)
         {
-            GST_DEBUG_OBJECT(sink, "need waitting display render all buf, queued:%d, rendered:%d, droped:%d", 
-                            sink->queued, 
-                            sink->rendered, 
-                            sink->droped);
+            GST_DEBUG_OBJECT(sink, "need waitting display render all buf, queued:%d, rendered:%d, droped:%d",
+                             sink->queued,
+                             sink->rendered,
+                             sink->droped);
             gst_wait_eos_signal(sink);
         }
     }
@@ -666,6 +706,7 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->priv;
         if (buffer)
         {
+            sink->last_displayed_buf_pts = GST_BUFFER_PTS(buffer);
             sink->rendered++;
             if ((sink_priv->got_eos || sink_priv->is_flushing) && sink->queued == sink->rendered + sink->droped)
             {
@@ -1033,7 +1074,7 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstVideoInfo *video_info = &(sink_priv->video_info);
-    int tunnelmode = 1; //1 for tunnel mode; 0 for non-tunnel mode
+    int tunnelmode = 1; // 1 for tunnel mode; 0 for non-tunnel mode
 
     // RenderWindowSize window_size = {0, 0, video_info->width, video_info->height};
     RenderFrameSize frame_size = {video_info->width, video_info->height};

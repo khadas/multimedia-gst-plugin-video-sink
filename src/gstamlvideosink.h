@@ -49,6 +49,8 @@ struct _GstAmlVideoSink
 {
   GstVideoSink parent;
 
+  GstClockTime last_displayed_buf_pts;
+
   /* eos detect */
   gint queued;
   gint dequeued;

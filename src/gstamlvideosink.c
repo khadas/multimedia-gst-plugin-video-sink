@@ -76,6 +76,7 @@ enum
     PROP_SETMUTE,
     PROP_AVSYNC_MODE,
     PROP_VIDEO_FRAME_DROP_NUM,
+    PROP_WINDOW_SET,
 };
 
 // #define AML_VIDEO_FORMATS                                          \
@@ -95,8 +96,18 @@ enum
 #define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE 1
 #define DRMBP_UNLIMIT_MAX_BUFSIZE 0
 
+typedef struct _GstAmlVideoSinkWindowSet
+{
+    gboolean window_change;
+    gint x;
+    gint y;
+    gint w;
+    gint h;
+} GstAmlVideoSinkWindowSet;
+
 struct _GstAmlVideoSinkPrivate
 {
+    GstAmlVideoSinkWindowSet window_set;
     GstBuffer *preroll_buffer;
     gchar *render_device_name;
     void *render_device_handle;
@@ -213,6 +224,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
         g_param_spec_int("frames-dropped", "frames-dropped",
                          "number of dropped frames",
                          0, G_MAXINT32, 0, G_PARAM_READABLE));
+
+    g_object_class_install_property(
+        G_OBJECT_CLASS(klass), PROP_WINDOW_SET,
+        g_param_spec_string("rectangle", "rectangle",
+                            "Window Set Format: x,y,width,height",
+                            NULL, G_PARAM_WRITABLE));
 }
 
 static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
@@ -310,6 +327,47 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         }
         GST_OBJECT_UNLOCK(sink);
         break;
+    case PROP_WINDOW_SET:
+    {
+        const gchar *str = g_value_get_string(value);
+        gchar **parts = g_strsplit(str, ",", 4);
+
+        if (!parts[0] || !parts[1] || !parts[2] || !parts[3])
+        {
+            GST_ERROR("Bad window properties string");
+        }
+        else
+        {
+            int nx, ny, nw, nh;
+            nx = atoi(parts[0]);
+            ny = atoi(parts[1]);
+            nw = atoi(parts[2]);
+            nh = atoi(parts[3]);
+
+            if ((nx != sink_priv->window_set.x) ||
+                (ny != sink_priv->window_set.y) ||
+                (nw != sink_priv->window_set.w) ||
+                (nh != sink_priv->window_set.h))
+            {
+                GST_OBJECT_LOCK(sink);
+                sink_priv->window_set.window_change = true;
+                sink_priv->window_set.x = nx;
+                sink_priv->window_set.y = ny;
+                sink_priv->window_set.w = nw;
+                sink_priv->window_set.h = nh;
+
+                GST_DEBUG("set window rect (%d,%d,%d,%d)\n",
+                          sink_priv->window_set.x,
+                          sink_priv->window_set.y,
+                          sink_priv->window_set.w,
+                          sink_priv->window_set.h);
+                GST_OBJECT_UNLOCK(sink);
+            }
+        }
+
+        g_strfreev(parts);
+        break;
+    }
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -561,6 +619,17 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         }
         GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
         goto flushing;
+    }
+
+    if(sink_priv->window_set.window_change)
+    {
+        RenderWindowSize window_size = {sink_priv->window_set.x, sink_priv->window_set.y, sink_priv->window_set.w, sink_priv->window_set.h};
+        if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
+        {
+            GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
+            return FALSE;
+        }
+        sink_priv->window_set.window_change = FALSE;
     }
 
     if (sink_priv->video_info_changed)

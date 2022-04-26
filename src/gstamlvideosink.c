@@ -588,7 +588,10 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     RenderBuffer *tunnel_lib_buf_wrap = NULL;
 
     GST_OBJECT_LOCK(vsink);
-    GST_LOG_OBJECT(sink, "revice buffer:%p, from pool:%p, need_preroll:%d", buffer, buffer->pool, ((GstBaseSink *)sink)->need_preroll);
+
+    GST_LOG_OBJECT(sink, "revice buffer:%p (start: %" GST_TIME_FORMAT", end: %" GST_TIME_FORMAT"), from pool:%p, need_preroll:%d", 
+                   buffer, GST_TIME_ARGS (GST_BUFFER_PTS(buffer)), GST_TIME_ARGS (GST_BUFFER_DURATION(buffer)),
+                   buffer->pool, ((GstBaseSink *)sink)->need_preroll);
 
     if (!sink_priv->render_device_handle)
     {
@@ -612,13 +615,16 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     if (sink_priv->is_flushing)
     {
         gst_buffer_unref(buffer);
-        if (!render_flush(sink_priv->render_device_handle))
+        if (render_flush(sink_priv->render_device_handle) == 0)
+        {
+            GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
+            goto flushing;
+        }
+        else
         {
             GST_ERROR_OBJECT(sink, "render lib: flush error");
             goto error;
         }
-        GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
-        goto flushing;
     }
 
     if(sink_priv->window_set.window_change)
@@ -691,6 +697,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         GST_INFO_OBJECT(sink, "flush start");
         GST_OBJECT_LOCK(sink);
         sink_priv->is_flushing = TRUE;
+        render_flush(sink_priv->render_device_handle);
         GST_OBJECT_UNLOCK(sink);
         break;
     }

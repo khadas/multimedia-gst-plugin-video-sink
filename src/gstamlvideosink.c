@@ -669,7 +669,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     }
 
     sink->queued++;
-    GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued ok", buffer);
+    GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued ok, queued:%d", buffer, sink->queued);
     return ret;
 
 error:
@@ -697,7 +697,10 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         GST_INFO_OBJECT(sink, "flush start");
         GST_OBJECT_LOCK(sink);
         sink_priv->is_flushing = TRUE;
-        render_flush(sink_priv->render_device_handle);
+        if(render_flush(sink_priv->render_device_handle) == 0)
+        {
+            GST_INFO_OBJECT(sink, "recv flush start and set render lib flushing succ");
+        }
         GST_OBJECT_UNLOCK(sink);
         break;
     }
@@ -715,6 +718,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         }
 
         GST_OBJECT_LOCK(sink);
+        GST_INFO_OBJECT(sink, "flush all count num to zero");
         sink->queued = 0;
         sink->dequeued = 0;
         sink->rendered = 0;
@@ -773,9 +777,9 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
     GstAmlVideoSink *sink = (GstAmlVideoSink *)userData;
     switch (type)
     {
+    case MSG_DROPED_BUFFER:
     case MSG_DISPLAYED_BUFFER:
     {
-        GST_LOG_OBJECT(sink, "get message: MSG_DISPLAYED_BUFFER from tunnel lib");
         GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
         RenderBuffer *tunnel_lib_buf_wrap = (RenderBuffer *)msg;
         RenderDmaBuffer *dmabuf = &tunnel_lib_buf_wrap->dma;
@@ -783,7 +787,22 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         if (buffer)
         {
             sink->last_displayed_buf_pts = GST_BUFFER_PTS(buffer);
-            sink->rendered++;
+            if(type == MSG_DROPED_BUFFER)
+            {
+                GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
+                sink->droped++;
+            }
+            else if(type == MSG_DISPLAYED_BUFFER)
+            {
+                GST_LOG_OBJECT(sink, "get message: MSG_DISPLAYED_BUFFER from tunnel lib");
+                sink->rendered++;
+            }
+
+            GST_DEBUG_OBJECT(sink, "buf:%p planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d pts:%lld, buf stat | queued:%d, dequeued:%d, droped:%d, rendered:%d",
+                            buffer,
+                            dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
+                            buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->droped, sink->rendered);
+
             if ((sink_priv->got_eos || sink_priv->is_flushing) && sink->queued == sink->rendered + sink->droped)
             {
                 gst_emit_eos_signal(sink);
@@ -791,23 +810,10 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         }
         else
         {
-            GST_ERROR_OBJECT(sink, "tunnel lib: return void GstBuffer when MSG_DISPLAYED_BUFFER");
+            GST_ERROR_OBJECT(sink, "tunnel lib: return void GstBuffer when MSG_DISPLAYED_BUFFER or MSG_DROPED_BUFFER");
         }
-
-        GST_DEBUG_OBJECT(sink, "buf out:%p\n\
-                                planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d\n\
-                                pts:%lld, buf stat | queued:%d, dequeued:%d, rendered:%d",
-                         buffer,
-                         dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
-                         buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->rendered);
         break;
     }
-    // case MSG_DROPED_BUFFER:
-    // {
-    //     GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
-    //     printf("gst amlvideosink : get message: MSG_DROPED_BUFFER from tunnel lib\n");
-    //     sink->droped++;
-    // }
     case MSG_RELEASE_BUFFER:
     {
         GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib");

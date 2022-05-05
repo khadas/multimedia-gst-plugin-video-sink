@@ -88,6 +88,7 @@ enum
 #define GST_CAPS_FEATURE_MEMORY_DMABUF "memory:DMABuf"
 #define GST_USE_PLAYBIN 1
 #define GST_DEFAULT_AVSYNC_MODE 1 // 0:v master, 1:a master
+#define GST_DUMP_STAT_FILENAME "amlvideosink_buf_stat"
 
 #define RENDER_DEVICE_NAME "westeros"
 #define USE_DMABUF TRUE
@@ -166,6 +167,7 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
 static gboolean gst_render_set_params(GstVideoSink *vsink);
 static void gst_emit_eos_signal(GstAmlVideoSink *vsink);
 static void gst_wait_eos_signal(GstAmlVideoSink *vsink);
+static void gst_aml_video_sink_dump_stat(GstAmlVideoSink *sink, const gchar *file_name);
 
 /* public interface definition */
 static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
@@ -589,8 +591,8 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
 
     GST_OBJECT_LOCK(vsink);
 
-    GST_LOG_OBJECT(sink, "revice buffer:%p (start: %" GST_TIME_FORMAT", end: %" GST_TIME_FORMAT"), from pool:%p, need_preroll:%d", 
-                   buffer, GST_TIME_ARGS (GST_BUFFER_PTS(buffer)), GST_TIME_ARGS (GST_BUFFER_DURATION(buffer)),
+    GST_LOG_OBJECT(sink, "revice buffer:%p (start: %" GST_TIME_FORMAT ", end: %" GST_TIME_FORMAT "), from pool:%p, need_preroll:%d",
+                   buffer, GST_TIME_ARGS(GST_BUFFER_PTS(buffer)), GST_TIME_ARGS(GST_BUFFER_DURATION(buffer)),
                    buffer->pool, ((GstBaseSink *)sink)->need_preroll);
 
     if (!sink_priv->render_device_handle)
@@ -627,7 +629,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         }
     }
 
-    if(sink_priv->window_set.window_change)
+    if (sink_priv->window_set.window_change)
     {
         RenderWindowSize window_size = {sink_priv->window_set.x, sink_priv->window_set.y, sink_priv->window_set.w, sink_priv->window_set.h};
         if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
@@ -697,7 +699,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         GST_INFO_OBJECT(sink, "flush start");
         GST_OBJECT_LOCK(sink);
         sink_priv->is_flushing = TRUE;
-        if(render_flush(sink_priv->render_device_handle) == 0)
+        if (render_flush(sink_priv->render_device_handle) == 0)
         {
             GST_INFO_OBJECT(sink, "recv flush start and set render lib flushing succ");
         }
@@ -787,22 +789,22 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         if (buffer)
         {
             sink->last_displayed_buf_pts = GST_BUFFER_PTS(buffer);
-            if(type == MSG_DROPED_BUFFER)
+            if (type == MSG_DROPED_BUFFER)
             {
                 GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
                 sink->droped++;
             }
-            else if(type == MSG_DISPLAYED_BUFFER)
+            else if (type == MSG_DISPLAYED_BUFFER)
             {
                 GST_LOG_OBJECT(sink, "get message: MSG_DISPLAYED_BUFFER from tunnel lib");
                 sink->rendered++;
             }
 
             GST_DEBUG_OBJECT(sink, "buf:%p planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d pts:%lld, buf stat | queued:%d, dequeued:%d, droped:%d, rendered:%d",
-                            buffer,
-                            dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
-                            buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->droped, sink->rendered);
-
+                             buffer,
+                             dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
+                             buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->droped, sink->rendered);
+            gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
             if ((sink_priv->got_eos || sink_priv->is_flushing) && sink->queued == sink->rendered + sink->droped)
             {
                 gst_emit_eos_signal(sink);
@@ -826,6 +828,7 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
             GST_DEBUG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib, buffer:%p, from pool:%p", buffer, buffer->pool);
             gst_buffer_unref(buffer);
             sink->dequeued++;
+            gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
         }
         else
         {
@@ -1183,6 +1186,39 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
     }
 
     return TRUE;
+}
+
+static void gst_aml_video_sink_dump_stat(GstAmlVideoSink *sink, const gchar *file_name)
+{
+    const gchar *dump_dir = NULL;
+    gchar *full_file_name = NULL;
+    FILE *out = NULL;
+
+    dump_dir = g_getenv("GST_DEBUG_DUMP_AMLVIDEOSINK_STAT_DIR");
+    if (G_LIKELY(dump_dir == NULL))
+        return;
+
+    if (!file_name)
+    {
+        file_name = "unnamed";
+    }
+
+    full_file_name = g_strdup_printf("%s" G_DIR_SEPARATOR_S "%s.stat", dump_dir, file_name);
+
+    if ((out = fopen(full_file_name, "w")))
+    {
+        gchar *stat_info;
+        stat_info = g_strdup_printf("Q:%d,  Dq:%d,  Render:%d,  Drop:%d\n", sink->queued, sink->dequeued, sink->rendered, sink->droped);
+        fputs(stat_info, out);
+        g_free(stat_info);
+        fclose(out);
+        GST_INFO("wrote amlvideosink stat to : '%s' succ", full_file_name);
+    }
+    else
+    {
+        GST_WARNING("Failed to open file '%s' for writing: %s", full_file_name, g_strerror(errno));
+    }
+    g_free(full_file_name);
 }
 
 /* plugin init */

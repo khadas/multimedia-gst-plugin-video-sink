@@ -398,7 +398,14 @@ gst_aml_video_sink_change_state(GstElement *element,
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(element);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
-    GST_DEBUG_OBJECT(sink, "trace in");
+    GstState state, next;
+
+    state = (GstState)GST_STATE_TRANSITION_CURRENT(transition);
+    next = GST_STATE_TRANSITION_NEXT(transition);
+    GST_LOG_OBJECT(sink,
+                     "amlvideosink handler tries setting state from %s to %s (%04x)",
+                     gst_element_state_get_name(state),
+                     gst_element_state_get_name(next), transition);
 
     GST_OBJECT_LOCK(sink);
     switch (transition)

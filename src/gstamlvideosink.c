@@ -254,6 +254,8 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     gst_aml_video_sink_reset_private(sink);
 
     gst_base_sink_set_sync(basesink, FALSE);
+
+    gst_base_sink_set_qos_enabled(basesink, FALSE);
 }
 
 static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
@@ -421,6 +423,9 @@ gst_aml_video_sink_change_state(GstElement *element,
         RenderCallback cb = {gst_render_msg_callback, gst_render_val_callback};
         render_set_callback(sink_priv->render_device_handle, &cb);
         render_set_user_data(sink_priv->render_device_handle, sink);
+        
+        GST_DEBUG_OBJECT(sink, "set qos fail");
+        gst_base_sink_set_qos_enabled((GstBaseSink *)sink, FALSE);
 
         break;
     }
@@ -872,6 +877,7 @@ int gst_render_val_callback(void *userData, int key, void *value)
     {
     case KEY_MEDIASYNC_INSTANCE_ID:
     {
+        // vsink->avsync_mode = 0;
         if (render_set(sink_priv->render_device_handle, KEY_MEDIASYNC_SYNC_MODE, (void *)&vsink->avsync_mode) == -1)
         {
             GST_ERROR_OBJECT(vsink, "tunnel lib: set syncmode error");

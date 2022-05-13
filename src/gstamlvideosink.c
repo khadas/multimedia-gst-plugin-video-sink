@@ -101,7 +101,11 @@ enum
 #define GST_DEFAULT_AVSYNC_MODE 1 // 0:v master, 1:a master
 #define GST_DUMP_STAT_FILENAME "amlvideosink_buf_stat"
 
+#if GST_IMPORT_LGE_PROP
+#define RENDER_DEVICE_NAME "videotunnel"
+#else
 #define RENDER_DEVICE_NAME "westeros"
+#endif
 #define USE_DMABUF TRUE
 
 #define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY 1
@@ -158,7 +162,7 @@ struct _GstAmlVideoSinkPrivate
     gboolean mute;
 
 #if GST_IMPORT_LGE_PROP
-    GstAmlVideoSinkLgeCtxt *lge_ctxt;
+    GstAmlVideoSinkLgeCtxt lge_ctxt;
 #endif
 };
 
@@ -272,7 +276,7 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
 
 #if GST_IMPORT_LGE_PROP
     g_object_class_install_property(
-        gobject_class, PROP_LGE_RESOURCE_INFO,
+        G_OBJECT_CLASS(klass), PROP_LGE_RESOURCE_INFO,
         g_param_spec_object("resource-info", "resource-info",
                             "After acquisition of H/W resources is completed, allocated resource information must be delivered to the decoder and the sink",
                             GST_TYPE_STRUCTURE,
@@ -289,30 +293,30 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
         G_OBJECT_CLASS(klass), PROP_LGE_INTERLEAVING_TYPE,
         g_param_spec_uint("interleaving-type", "interleaving type",
                           "set 3D type",
-                          0, G_MININT8,
+                          0, G_MAXUINT,
                           0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     g_object_class_install_property(
-        gobject_class, PROP_LGE_APP_TYPE,
+        G_OBJECT_CLASS(klass), PROP_LGE_APP_TYPE,
         g_param_spec_string("app-type", "app-type",
                             "set application type.",
                             "default_app",
                             G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     g_object_class_install_property(
-        gobject_class, PROP_LGE_SYNC,
+        G_OBJECT_CLASS(klass), PROP_LGE_SYNC,
         g_param_spec_boolean("sync", "sync",
                              "M16, H15, K2L",
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     g_object_class_install_property(
-        gobject_class, PROP_LGE_DISH_TRICK,
+        G_OBJECT_CLASS(klass), PROP_LGE_DISH_TRICK,
         g_param_spec_boolean("dish-trick", "dish trick",
                              "H15, M16",
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     g_object_class_install_property(
-        gobject_class, PROP_LGE_DISH_TRICK_IGNORE_RATE,
+        G_OBJECT_CLASS(klass), PROP_LGE_DISH_TRICK_IGNORE_RATE,
         g_param_spec_boolean("dish-trick-ignore-rate", "dish trick ignore rate",
                              "H15, M16",
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
@@ -337,11 +341,6 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
 
     GST_AML_VIDEO_SINK_GET_PRIVATE(sink) = malloc(sizeof(GstAmlVideoSinkPrivate));
     gst_aml_video_sink_reset_private(sink);
-#if GST_IMPORT_LGE_PROP
-    GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
-    sink_priv->lge_ctxt = malloc(sizeof(GstAmlVideoSinkLgeCtxt));
-    memset(sink_priv->lge_ctxt, 0, sizeof(GstAmlVideoSinkLgeCtxt));
-#endif
     gst_base_sink_set_sync(basesink, FALSE);
 
     gst_base_sink_set_qos_enabled(basesink, FALSE);
@@ -381,10 +380,11 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         GST_OBJECT_LOCK(sink);
         g_value_set_uint64(value, sink->last_displayed_buf_pts);
         GST_OBJECT_UNLOCK(sink);
+        break;
     }
 #endif
     default:
-        G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
+        // G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
     }
 }
@@ -478,20 +478,23 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         {
             if (gst_structure_has_field(r_info, "coretype"))
             {
-                if (sink_priv->lge_ctxt->res_info.coretype)
-                    g_free(sink_priv->lge_ctxt->res_info.coretype);
-                sink_priv->lge_ctxt->res_info.coretype = g_strdup(gst_structure_get_string(r_info, "coretype"));
+                if (sink_priv->lge_ctxt.res_info.coretype)
+                {
+                    g_free(sink_priv->lge_ctxt.res_info.coretype);
+                    sink_priv->lge_ctxt.res_info.coretype = NULL;
+                }
+                sink_priv->lge_ctxt.res_info.coretype = g_strdup(gst_structure_get_string(r_info, "coretype"));
             }
             if (gst_structure_has_field(r_info, "videoport"))
-                gst_structure_get_int(r_info, "videoport", &(sink_priv->lge_ctxt->res_info.videoport));
+                gst_structure_get_int(r_info, "videoport", &(sink_priv->lge_ctxt.res_info.videoport));
             if (gst_structure_has_field(r_info, "audioport"))
-                gst_structure_get_int(r_info, "audioport", &(sink_priv->lge_ctxt->res_info.audioport));
+                gst_structure_get_int(r_info, "audioport", &(sink_priv->lge_ctxt.res_info.audioport));
             if (gst_structure_has_field(r_info, "maxwidth"))
-                gst_structure_get_int(r_info, "maxwidth", &(sink_priv->lge_ctxt->res_info.maxwidth));
+                gst_structure_get_int(r_info, "maxwidth", &(sink_priv->lge_ctxt.res_info.maxwidth));
             if (gst_structure_has_field(r_info, "maxheight"))
-                gst_structure_get_int(r_info, "maxheight", &(sink_priv->lge_ctxt->res_info.maxheight));
+                gst_structure_get_int(r_info, "maxheight", &(sink_priv->lge_ctxt.res_info.maxheight));
             if (gst_structure_has_field(r_info, "mixerport"))
-                gst_structure_get_int(r_info, "mixerport", &(sink_priv->lge_ctxt->res_info.mixerport));
+                gst_structure_get_int(r_info, "mixerport", &(sink_priv->lge_ctxt.res_info.mixerport));
         }
         GST_OBJECT_UNLOCK(sink);
         break;
@@ -500,7 +503,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
     {
         GST_OBJECT_LOCK(sink);
         guint interlv_type = g_value_get_uint(value);
-        sink_priv->lge_ctxt->interleaving_type = interlv_type;
+        sink_priv->lge_ctxt.interleaving_type = interlv_type;
         GST_OBJECT_UNLOCK(sink);
         break;
     }
@@ -508,37 +511,36 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
     {
         GST_OBJECT_LOCK(sink);
         GST_DEBUG_OBJECT(sink, "LGE up layer set app type");
-        if (sink_priv->lge_ctxt->app_type)
-            g_free(sink_priv->lge_ctxt->app_type);
-        sink_priv->lge_ctxt->app_type = g_strdup(g_value_get_string(value));
-        break;
+        if (sink_priv->lge_ctxt.app_type)
+            g_free(sink_priv->lge_ctxt.app_type);
+        sink_priv->lge_ctxt.app_type = g_strdup(g_value_get_string(value));
         GST_OBJECT_UNLOCK(sink);
         break;
     }
     case PROP_LGE_SYNC:
     {
         GST_OBJECT_LOCK(sink);
-        sink_priv->lge_ctxt->sync = g_value_get_boolean(value);
+        sink_priv->lge_ctxt.sync = g_value_get_boolean(value);
         GST_OBJECT_UNLOCK(sink);
         break;
     }
     case PROP_LGE_DISH_TRICK:
     {
         GST_OBJECT_LOCK(sink);
-        sink_priv->lge_ctxt->dish_trick = g_value_get_boolean(value);
+        sink_priv->lge_ctxt.dish_trick = g_value_get_boolean(value);
         GST_OBJECT_UNLOCK(sink);
         break;
     }
     case PROP_LGE_DISH_TRICK_IGNORE_RATE:
     {
         GST_OBJECT_LOCK(sink);
-        sink_priv->lge_ctxt->dish_trick_ignore_rate = g_value_get_boolean(value);
+        sink_priv->lge_ctxt.dish_trick_ignore_rate = g_value_get_boolean(value);
         GST_OBJECT_UNLOCK(sink);
         break;
     }
 #endif
     default:
-        G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
+        // G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
     }
 }
@@ -752,18 +754,18 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
         goto done;
     }
 
-#if GST_IMPORT_LGE_PROP
-    GstMessage *message;
-    GstStructure *s;
-    s = gst_structure_new("media-info",
-                          "type", "G_TYPE_INT", 1,
-                          "mime-type", G_TYPE_STRING, sink_priv->video_info.finfo->name,
-                          "width", G_TYPE_INT, sink_priv->video_info.width,
-                          "height", "G_TYPE_INT", sink_priv->video_info.height,
-                          NULL);
-    message = gst_message_new_custom(GST_MESSAGE_APPLICATION, GST_OBJECT(sink), s);
-    gst_element_post_message(GST_ELEMENT_CAST(sink), message);
-#endif
+// #if GST_IMPORT_LGE_PROP
+//     GstMessage *message;
+//     GstStructure *s;
+//     s = gst_structure_new("media-info",
+//                           "type", "G_TYPE_INT", 1,
+//                           "mime-type", G_TYPE_STRING, sink_priv->video_info.finfo->name,
+//                           "width", G_TYPE_INT, sink_priv->video_info.width,
+//                           "height", "G_TYPE_INT", sink_priv->video_info.height,
+//                           NULL);
+//     message = gst_message_new_custom(GST_MESSAGE_APPLICATION, GST_OBJECT(sink), s);
+//     gst_element_post_message(GST_ELEMENT_CAST(sink), message);
+// #endif
 
     sink_priv->video_info_changed = TRUE;
 
@@ -958,19 +960,16 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
 {
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+#if GST_IMPORT_LGE_PROP
+    if (sink_priv->lge_ctxt.app_type)
+        g_free(sink_priv->lge_ctxt.app_type);
+    if (sink_priv->lge_ctxt.res_info.coretype)
+        g_free(sink_priv->lge_ctxt.res_info.coretype);
+#endif
     memset(sink_priv, 0, sizeof(GstAmlVideoSinkPrivate));
     sink_priv->render_device_name = RENDER_DEVICE_NAME;
     sink_priv->use_dmabuf = USE_DMABUF;
     sink_priv->mediasync_instanceid = -1;
-#if GST_IMPORT_LGE_PROP
-    if (sink_priv->lge_ctxt)
-    {
-        if (sink_priv->lge_ctxt->app_type)
-            g_free(sink_priv->lge_ctxt->app_type);
-        free(sink_priv->lge_ctxt);
-        sink_priv->lge_ctxt = NULL;
-    }
-#endif
 }
 
 void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
@@ -1184,7 +1183,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
     tunnel_lib_buf_wrap->flag = BUFFER_FLAG_EXTER_DMA_BUFFER;
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
     tunnel_lib_buf_wrap->priv = (void *)gst_buf;
-    GST_DEBUG_OBJECT(vsink, "set tunnel lib buf priv:%p from pool:%p", tunnel_lib_buf_wrap->priv, gst_buf->pool);
+    GST_DEBUG_OBJECT(vsink, "set tunnel lib buf priv:%p from pool:%p, pts:%lld", tunnel_lib_buf_wrap->priv, gst_buf->pool, tunnel_lib_buf_wrap->pts);
     GST_DEBUG_OBJECT(vsink, "dbg: buf in:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d",
                      tunnel_lib_buf_wrap->priv,
                      dmabuf->planeCnt,

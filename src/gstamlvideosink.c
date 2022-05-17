@@ -1359,7 +1359,7 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstVideoInfo *video_info = &(sink_priv->video_info);
-    int tunnelmode = 1; // 1 for tunnel mode; 0 for non-tunnel mode
+    int tunnelmode = 0; // 1 for tunnel mode; 0 for non-tunnel mode
 
     // RenderWindowSize window_size = {0, 0, video_info->width, video_info->height};
     RenderFrameSize frame_size = {video_info->width, video_info->height};

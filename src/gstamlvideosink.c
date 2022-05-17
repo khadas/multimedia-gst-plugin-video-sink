@@ -863,6 +863,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     }
 
     sink->queued++;
+    gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
     GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued ok, queued:%d", buffer, sink->queued);
     return ret;
 

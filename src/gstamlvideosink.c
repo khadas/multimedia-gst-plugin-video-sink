@@ -186,8 +186,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
                                             const GValue *value,
                                             GParamSpec *pspec);
 static void gst_aml_video_sink_finalize(GObject *object);
-static GstStateChangeReturn
-gst_aml_video_sink_change_state(GstElement *element, GstStateChange transition);
+static GstStateChangeReturn gst_aml_video_sink_change_state(GstElement *element, GstStateChange transition);
 static gboolean gst_aml_video_sink_query(GstElement *element, GstQuery *query);
 static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQuery *query);
 static GstCaps *gst_aml_video_sink_get_caps(GstBaseSink *bsink,
@@ -195,6 +194,7 @@ static GstCaps *gst_aml_video_sink_get_caps(GstBaseSink *bsink,
 static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps);
 static gboolean gst_aml_video_sink_show_frame(GstVideoSink *bsink, GstBuffer *buffer);
 static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, GstEvent *event);
+static gboolean gst_aml_video_sink_send_event(GstElement *element, GstEvent *event);
 
 /* private interface define */
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
@@ -236,7 +236,7 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
 
     gstelement_class->change_state = GST_DEBUG_FUNCPTR(gst_aml_video_sink_change_state);
     gstelement_class->query = GST_DEBUG_FUNCPTR(gst_aml_video_sink_query);
-    ;
+    gstelement_class->send_event = GST_DEBUG_FUNCPTR(gst_aml_video_sink_send_event);
 
     gstbasesink_class->propose_allocation = GST_DEBUG_FUNCPTR(gst_aml_video_sink_propose_allocation);
     gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR(gst_aml_video_sink_get_caps);
@@ -603,6 +603,20 @@ gst_aml_video_sink_change_state(GstElement *element,
             GST_ERROR_OBJECT(sink, "render lib connect device fail");
             goto error;
         }
+        if (render_pause(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib pause device fail when first into paused state");
+            goto error;
+        }
+        break;
+    }
+    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+    {
+        if (render_resume(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib resume device fail");
+            goto error;
+        }
         break;
     }
     default:
@@ -619,6 +633,22 @@ gst_aml_video_sink_change_state(GstElement *element,
 
     switch (transition)
     {
+    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+    {
+        GstBaseSink *basesink;
+        basesink = GST_BASE_SINK(sink);
+
+        if (render_pause(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib pause device fail");
+            goto error;
+        }
+
+        // GST_BASE_SINK_PREROLL_LOCK(basesink);
+        // basesink->have_preroll = 1;
+        // GST_BASE_SINK_PREROLL_UNLOCK(basesink);
+        break;
+    }
     case GST_STATE_CHANGE_PAUSED_TO_READY:
     {
         render_disconnect(sink_priv->render_device_handle);
@@ -754,18 +784,18 @@ static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
         goto done;
     }
 
-// #if GST_IMPORT_LGE_PROP
-//     GstMessage *message;
-//     GstStructure *s;
-//     s = gst_structure_new("media-info",
-//                           "type", "G_TYPE_INT", 1,
-//                           "mime-type", G_TYPE_STRING, sink_priv->video_info.finfo->name,
-//                           "width", G_TYPE_INT, sink_priv->video_info.width,
-//                           "height", "G_TYPE_INT", sink_priv->video_info.height,
-//                           NULL);
-//     message = gst_message_new_custom(GST_MESSAGE_APPLICATION, GST_OBJECT(sink), s);
-//     gst_element_post_message(GST_ELEMENT_CAST(sink), message);
-// #endif
+    // #if GST_IMPORT_LGE_PROP
+    //     GstMessage *message;
+    //     GstStructure *s;
+    //     s = gst_structure_new("media-info",
+    //                           "type", "G_TYPE_INT", 1,
+    //                           "mime-type", G_TYPE_STRING, sink_priv->video_info.finfo->name,
+    //                           "width", G_TYPE_INT, sink_priv->video_info.width,
+    //                           "height", "G_TYPE_INT", sink_priv->video_info.height,
+    //                           NULL);
+    //     message = gst_message_new_custom(GST_MESSAGE_APPLICATION, GST_OBJECT(sink), s);
+    //     gst_element_post_message(GST_ELEMENT_CAST(sink), message);
+    // #endif
 
     sink_priv->video_info_changed = TRUE;
 
@@ -803,6 +833,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     {
         GST_LOG_OBJECT(sink, "get preroll buffer 1st time, buf:%p", buffer);
         sink_priv->preroll_buffer = buffer;
+        // goto flushing;
     }
 
     // TODO should call tunnel lib flush func
@@ -954,6 +985,66 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     }
     }
     gst_event_unref(event);
+    return result;
+}
+
+static gboolean gst_aml_video_sink_send_event(GstElement *element, GstEvent *event)
+{
+    GstPad *pad = NULL;
+    GstBaseSink *basesink = GST_BASE_SINK(element);
+    GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(element);
+    GstAmlVideoSinkClass *sink_class = GST_AML_VIDEO_SINK_GET_CLASS(sink);
+    GstVideoSinkClass *sink_p_class = parent_class;
+    GstBaseSinkClass *sink_pp_class = g_type_class_peek_parent(sink_p_class);
+    gboolean result = TRUE;
+    GstPadMode mode = GST_PAD_MODE_NONE;
+
+    GST_DEBUG_OBJECT(sink, "amlvideosink_class:%p, videosink_class:%p, basesink_class:%p", sink_class, sink_p_class, sink_pp_class);
+    GST_DEBUG_OBJECT(sink, "handling event %p %" GST_PTR_FORMAT, event, event);
+
+    switch (GST_EVENT_TYPE(event))
+    {
+    case GST_EVENT_SEEK:
+    {
+        GST_OBJECT_LOCK(element);
+        /* get the pad and the scheduling mode */
+        pad = gst_object_ref(basesink->sinkpad);
+        mode = basesink->pad_mode;
+        GST_OBJECT_UNLOCK(element);
+
+        if (mode == GST_PAD_MODE_PUSH)
+        {
+            GST_BASE_SINK_PREROLL_LOCK(basesink);
+            if (GST_BASE_SINK(sink)->need_preroll && GST_BASE_SINK(sink)->have_preroll)
+            {
+                GST_DEBUG_OBJECT(sink, "reset preroll when recived seek event");
+                GST_BASE_SINK(sink)->need_preroll = FALSE;
+                GST_BASE_SINK(sink)->have_preroll = FALSE;
+                GST_BASE_SINK_PREROLL_SIGNAL(basesink);
+            }
+            GST_BASE_SINK_PREROLL_UNLOCK(basesink);
+        }
+
+        gst_object_unref(pad);
+        break;
+    }
+    default:
+        break;
+    }
+
+    if (GST_ELEMENT_CLASS(sink_pp_class)->send_event)
+    {
+        GST_DEBUG_OBJECT(sink, "use basesink class send event func handle event");
+        result = GST_ELEMENT_CLASS(sink_pp_class)->send_event(element, event);
+    }
+    else
+    {
+        GST_ERROR_OBJECT(sink, "can't find basesink send event func");
+        result = FALSE;
+    }
+
+    GST_DEBUG_OBJECT(sink, "handled event: %d", result);
+
     return result;
 }
 

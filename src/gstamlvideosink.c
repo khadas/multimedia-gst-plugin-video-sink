@@ -328,6 +328,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     GstBaseSink *basesink = (GstBaseSink *)sink;
 
     sink->last_displayed_buf_pts = 0;
+    sink->last_dec_buf_pts = 0;
     /* init eos detect */
     sink->queued = 0;
     sink->dequeued = 0;
@@ -656,7 +657,15 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_PAUSED_TO_READY:
     {
-        render_disconnect(sink_priv->render_device_handle);
+        GST_DEBUG_OBJECT(sink, "before disconnect rlib");
+        if (render_disconnect(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib disconnect device fail");
+            goto error;
+        }
+        GST_DEBUG_OBJECT(sink, "after disconnect rlib");
+        GST_DEBUG_OBJECT(sink, "buf stat | queued:%d, dequeued:%d, droped:%d, rendered:%d",
+                         sink->queued, sink->dequeued, sink->droped, sink->rendered);
         break;
     }
     case GST_STATE_CHANGE_READY_TO_NULL:
@@ -699,6 +708,7 @@ static gboolean gst_aml_video_sink_query(GstElement *element, GstQuery *query)
         {
             GST_OBJECT_LOCK(sink);
             gint64 position = sink->last_displayed_buf_pts;
+            // gint64 position = sink->last_dec_buf_pts;
             GST_OBJECT_UNLOCK(sink);
             GST_LOG_OBJECT(sink, "got position: %" GST_TIME_FORMAT, GST_TIME_ARGS(position));
             gst_query_set_position(query, GST_FORMAT_TIME, position);
@@ -822,6 +832,9 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
                    buffer, GST_TIME_ARGS(GST_BUFFER_PTS(buffer)), GST_TIME_ARGS(GST_BUFFER_DURATION(buffer)),
                    buffer->pool, ((GstBaseSink *)sink)->need_preroll);
 
+    sink->last_dec_buf_pts = GST_BUFFER_PTS(buffer);
+    GST_DEBUG_OBJECT(sink, "set last_dec_buf_pts %" GST_TIME_FORMAT, GST_TIME_ARGS(sink->last_dec_buf_pts));
+
     if (!sink_priv->render_device_handle)
     {
         GST_ERROR_OBJECT(sink, "flow error, render_device_handle == NULL");
@@ -932,6 +945,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         {
             GST_INFO_OBJECT(sink, "recv flush start and set render lib flushing succ");
         }
+        GST_INFO_OBJECT(sink, "flush start done");
         GST_OBJECT_UNLOCK(sink);
         break;
     }
@@ -956,6 +970,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         sink->droped = 0;
         sink_priv->got_eos = FALSE;
         sink_priv->is_flushing = FALSE;
+        GST_INFO_OBJECT(sink, "flush stop done");
         GST_OBJECT_UNLOCK(sink);
         break;
     }
@@ -964,7 +979,8 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         GST_OBJECT_LOCK(sink);
         gst_event_copy_segment(event, &sink_priv->segment);
         GST_INFO_OBJECT(sink, "configured segment %" GST_SEGMENT_FORMAT, &sink_priv->segment);
-        // TODO set play rate to tunnel lib, 切换rate这部分是不是只需要audio那边set即可
+        sink->last_displayed_buf_pts = sink_priv->segment.position;
+        GST_INFO_OBJECT(sink, "update cur pos to %" GST_TIME_FORMAT, GST_TIME_ARGS(sink->last_displayed_buf_pts));
         GST_OBJECT_UNLOCK(sink);
         break;
     }

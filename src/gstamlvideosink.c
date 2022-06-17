@@ -335,6 +335,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->rendered = 0;
     sink->droped = 0;
     sink->avsync_mode = GST_DEFAULT_AVSYNC_MODE;
+    sink->secure_mode = FALSE;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -733,11 +734,10 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
     gboolean need_pool;
 
     gst_query_parse_allocation(query, &caps, &need_pool);
-    GST_DEBUG_OBJECT(bsink, "jxsaaa need_pool:%d", need_pool);
+    GST_DEBUG_OBJECT(bsink, "need_pool: %d, secure_mode: %d", need_pool, sink->secure_mode);
 
     if (need_pool)
-        // TODO 没有考虑secure场景
-        pool = gst_drm_bufferpool_new(FALSE, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
+        pool = gst_drm_bufferpool_new(sink->secure_mode, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
 
     gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY, DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE);
     if (pool)
@@ -998,6 +998,15 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
                              sink->droped);
             gst_wait_eos_signal(sink);
         }
+    }
+    case GST_EVENT_CUSTOM_DOWNSTREAM:
+    {
+        if (gst_event_has_name (event, "IS_SVP"))
+        {
+            GST_DEBUG_OBJECT(sink, "Got SVP Event");
+            sink->secure_mode = TRUE;
+        }
+        break;
     }
     default:
     {

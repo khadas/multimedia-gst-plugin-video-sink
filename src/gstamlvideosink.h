@@ -60,6 +60,8 @@ struct _GstAmlVideoSink
   GMutex eos_lock;
   GCond eos_cond;
 
+  gboolean secure_mode;
+
   GstAmlVideoSinkPrivate *priv;
 };
 

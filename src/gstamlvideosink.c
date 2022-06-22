@@ -1326,6 +1326,8 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
     {
         sink_priv->mediasync_instanceid = gst_aml_clock_get_session_id(amlclock);
         GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d, from aml audio clock:%p. in aml audio sink:%p", sink_priv->mediasync_instanceid, amlclock, vsink);
+        gst_object_unref (amlclock);
+        GST_DEBUG_OBJECT(vsink, "unref clock");
         if (sink_priv->mediasync_instanceid == -1)
         {
             GST_ERROR_OBJECT(vsink, "audio sink: don't have valid mediasync instance id");

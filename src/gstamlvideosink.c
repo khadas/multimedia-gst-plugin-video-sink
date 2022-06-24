@@ -995,6 +995,17 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         }
         break;
     }
+    case GST_EVENT_CUSTOM_DOWNSTREAM_STICKY:
+    {
+        if (gst_event_has_name (event, "IS_SVP"))
+        {
+            GST_OBJECT_LOCK(sink);
+            GST_DEBUG_OBJECT(sink, "Got SVP-custom sticky Event");
+            sink->secure_mode = TRUE;
+            GST_OBJECT_UNLOCK(sink);
+        }
+        break;
+    }
     case GST_EVENT_EOS:
     {
         GST_OBJECT_LOCK(sink);

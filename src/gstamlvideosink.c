@@ -739,6 +739,10 @@ static gboolean gst_aml_video_sink_propose_allocation(GstBaseSink *bsink, GstQue
     if (need_pool)
         pool = gst_drm_bufferpool_new(sink->secure_mode, GST_DRM_BUFFERPOOL_TYPE_VIDEO_PLANE);
 
+    // Do not store the last received sample if it is secure_mode
+    if (TRUE == sink->secure_mode)
+        gst_base_sink_set_last_sample_enabled(bsink, FALSE);
+
     gst_query_add_allocation_pool(query, pool, sink_priv->video_info.size, DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY, DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE);
     if (pool)
         g_object_unref(pool);

@@ -45,9 +45,9 @@
 #undef GST_OBJECT_LOCK
 #define GST_OBJECT_LOCK(obj)                                           \
     {                                                                  \
-        GST_DEBUG("dbg basesink ctxt lock | aml | %p | locking", obj); \
+        GST_DEBUG("dbg basesink ctxt lock | aml | locking | %p", obj); \
         g_mutex_lock(GST_OBJECT_GET_LOCK(obj));                        \
-        GST_DEBUG("dbg basesink ctxt lock | aml | %p | locked", obj);  \
+        GST_DEBUG("dbg basesink ctxt lock | aml | locked  | %p", obj);  \
     }
 #endif
 
@@ -55,9 +55,29 @@
 #undef GST_OBJECT_UNLOCK
 #define GST_OBJECT_UNLOCK(obj)                                          \
     {                                                                   \
-        GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocking", obj); \
+        GST_DEBUG("dbg basesink ctxt lock | aml | unlocking | %p", obj); \
         g_mutex_unlock(GST_OBJECT_GET_LOCK(obj));                       \
-        GST_DEBUG("dbg basesink ctxt lock | aml |%p | unlocked", obj);  \
+        GST_DEBUG("dbg basesink ctxt lock | aml | unlocked  | %p", obj);  \
+    }
+#endif
+
+#ifdef GST_BASE_SINK_PREROLL_LOCK
+#undef GST_BASE_SINK_PREROLL_LOCK
+#define GST_BASE_SINK_PREROLL_LOCK(obj)                                           \
+    {                                                                  \
+        GST_DEBUG("dbg basesink preroll lock | aml | locking | %p", obj); \
+        g_mutex_lock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                        \
+        GST_DEBUG("dbg basesink preroll lock | aml | locked  | %p", obj);  \
+    }
+#endif
+
+#ifdef GST_BASE_SINK_PREROLL_UNLOCK
+#undef GST_BASE_SINK_PREROLL_UNLOCK
+#define GST_BASE_SINK_PREROLL_UNLOCK(obj)                                          \
+    {                                                                   \
+        GST_DEBUG("dbg basesink preroll lock | aml | unlocking | %p", obj); \
+        g_mutex_unlock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                       \
+        GST_DEBUG("dbg basesink preroll lock | aml | unlocked  | %p", obj);  \
     }
 #endif
 
@@ -623,6 +643,19 @@ gst_aml_video_sink_change_state(GstElement *element,
         {
             GST_ERROR_OBJECT(sink, "render lib resume device fail");
             goto error;
+        }
+        break;
+    }
+    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+    {
+        if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
+        {
+            GstBaseSink *basesink;
+            basesink = GST_BASE_SINK(sink);
+            GST_BASE_SINK_PREROLL_LOCK (basesink);
+            basesink->have_preroll = 1;
+            GST_BASE_SINK_PREROLL_UNLOCK (basesink);
+            GST_DEBUG_OBJECT(sink, "1 set have preroll to true");
         }
         break;
     }

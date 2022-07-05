@@ -744,7 +744,7 @@ static gboolean gst_aml_video_sink_query(GstElement *element, GstQuery *query)
             gint64 position = sink->last_displayed_buf_pts;
             // gint64 position = sink->last_dec_buf_pts;
             GST_OBJECT_UNLOCK(sink);
-            GST_LOG_OBJECT(sink, "got position: %" GST_TIME_FORMAT, GST_TIME_ARGS(position));
+            GST_DEBUG_OBJECT(sink, "got position: %" GST_TIME_FORMAT, GST_TIME_ARGS(position));
             gst_query_set_position(query, GST_FORMAT_TIME, position);
             return TRUE;
         }
@@ -971,6 +971,8 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(parent);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
 
+    GST_DEBUG_OBJECT (sink, "received event %p %" GST_PTR_FORMAT, event, event);
+
     switch (GST_EVENT_TYPE(event))
     {
     case GST_EVENT_FLUSH_START:
@@ -1060,10 +1062,13 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     }
     default:
     {
-        GST_DEBUG_OBJECT(sink, "pass to basesink");
-        return GST_BASE_SINK_CLASS(parent_class)->event((GstBaseSink *)sink, event);
+        break;
+
     }
     }
+
+    GST_DEBUG_OBJECT(sink, "pass to basesink");
+    result = GST_BASE_SINK_CLASS(parent_class)->event((GstBaseSink *)sink, event);
     gst_event_unref(event);
     return result;
 }

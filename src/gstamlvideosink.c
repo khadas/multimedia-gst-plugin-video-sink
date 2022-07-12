@@ -99,6 +99,7 @@ enum
     PROP_AVSYNC_MODE,
     PROP_VIDEO_FRAME_DROP_NUM,
     PROP_WINDOW_SET,
+    PROP_RES_USAGE,
 #if GST_IMPORT_LGE_PROP
     PROP_LGE_RESOURCE_INFO,
     PROP_LGE_CURRENT_PTS,
@@ -294,6 +295,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                             "Window Set Format: x,y,width,height",
                             NULL, G_PARAM_WRITABLE));
 
+      g_object_class_install_property (
+        G_OBJECT_CLASS(klass), PROP_RES_USAGE,
+        g_param_spec_int ("res-usage", "res-usage",
+                          "Flags to indicate intended usage",
+                          G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
+
 #if GST_IMPORT_LGE_PROP
     g_object_class_install_property(
         G_OBJECT_CLASS(klass), PROP_LGE_RESOURCE_INFO,
@@ -355,6 +362,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->rendered = 0;
     sink->droped = 0;
     sink->avsync_mode = GST_DEFAULT_AVSYNC_MODE;
+    sink->pip_mode = 0;
     sink->secure_mode = FALSE;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
@@ -451,7 +459,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         if (mode >= 0)
         {
             sink->avsync_mode = mode;
-            GST_WARNING("AV sync mode %d", mode);
+            GST_DEBUG_OBJECT(sink, "AV sync mode %d", mode);
         }
         GST_OBJECT_UNLOCK(sink);
         break;
@@ -494,6 +502,14 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         }
 
         g_strfreev(parts);
+        break;
+    }
+    case PROP_RES_USAGE:
+    {
+        GST_OBJECT_LOCK(sink);
+        sink->pip_mode = 1;
+        GST_DEBUG_OBJECT(sink, "play video in sub layer(pip)");
+        GST_OBJECT_UNLOCK(sink);
         break;
     }
 #if GST_IMPORT_LGE_PROP
@@ -617,6 +633,14 @@ gst_aml_video_sink_change_state(GstElement *element,
         RenderCallback cb = {gst_render_msg_callback, gst_render_val_callback};
         render_set_callback(sink_priv->render_device_handle, &cb);
         render_set_user_data(sink_priv->render_device_handle, sink);
+
+        GST_DEBUG_OBJECT(sink, "tunnel lib: set pip mode");
+        int pip = 1;
+        if (sink->pip_mode && render_set(sink_priv->render_device_handle, KEY_VIDEO_PIP, &pip) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "tunnel lib: set pip error");
+            goto error;
+        }
 
         GST_DEBUG_OBJECT(sink, "set qos fail");
         gst_base_sink_set_qos_enabled((GstBaseSink *)sink, FALSE);
@@ -916,6 +940,12 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
             return FALSE;
         }
         sink_priv->window_set.window_change = FALSE;
+
+        GST_DEBUG_OBJECT(sink, "tunnel lib: set window size to %d,%d,%d,%d",
+                         sink_priv->window_set.x,
+                         sink_priv->window_set.y,
+                         sink_priv->window_set.w,
+                         sink_priv->window_set.h);
     }
 
     if (sink_priv->video_info_changed)
@@ -1024,6 +1054,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
         break;
     }
     case GST_EVENT_CUSTOM_DOWNSTREAM:
+    case GST_EVENT_CUSTOM_DOWNSTREAM_STICKY:
     {
         if (gst_event_has_name (event, "IS_SVP"))
         {
@@ -1032,18 +1063,8 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
             sink->secure_mode = TRUE;
             GST_OBJECT_UNLOCK(sink);
         }
-        break;
-    }
-    case GST_EVENT_CUSTOM_DOWNSTREAM_STICKY:
-    {
-        if (gst_event_has_name (event, "IS_SVP"))
-        {
-            GST_OBJECT_LOCK(sink);
-            GST_DEBUG_OBJECT(sink, "Got SVP-custom sticky Event");
-            sink->secure_mode = TRUE;
-            GST_OBJECT_UNLOCK(sink);
-        }
-        break;
+        gst_event_unref(event);
+        return result;
     }
     case GST_EVENT_EOS:
     {

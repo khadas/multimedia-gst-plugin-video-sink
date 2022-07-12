@@ -57,6 +57,7 @@ struct _GstAmlVideoSink
   gint rendered;
   gint droped;
   gint avsync_mode;
+  gboolean pip_mode;
   GMutex eos_lock;
   GCond eos_cond;
 

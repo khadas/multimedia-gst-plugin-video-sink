@@ -1090,7 +1090,6 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
 
     GST_DEBUG_OBJECT(sink, "pass to basesink");
     result = GST_BASE_SINK_CLASS(parent_class)->event((GstBaseSink *)sink, event);
-    gst_event_unref(event);
     return result;
 }
 

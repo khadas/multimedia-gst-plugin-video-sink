@@ -47,37 +47,37 @@
     {                                                                  \
         GST_DEBUG("dbg basesink ctxt lock | aml | locking | %p", obj); \
         g_mutex_lock(GST_OBJECT_GET_LOCK(obj));                        \
-        GST_DEBUG("dbg basesink ctxt lock | aml | locked  | %p", obj);  \
+        GST_DEBUG("dbg basesink ctxt lock | aml | locked  | %p", obj); \
     }
 #endif
 
 #ifdef GST_OBJECT_UNLOCK
 #undef GST_OBJECT_UNLOCK
-#define GST_OBJECT_UNLOCK(obj)                                          \
-    {                                                                   \
+#define GST_OBJECT_UNLOCK(obj)                                           \
+    {                                                                    \
         GST_DEBUG("dbg basesink ctxt lock | aml | unlocking | %p", obj); \
-        g_mutex_unlock(GST_OBJECT_GET_LOCK(obj));                       \
-        GST_DEBUG("dbg basesink ctxt lock | aml | unlocked  | %p", obj);  \
+        g_mutex_unlock(GST_OBJECT_GET_LOCK(obj));                        \
+        GST_DEBUG("dbg basesink ctxt lock | aml | unlocked  | %p", obj); \
     }
 #endif
 
 #ifdef GST_BASE_SINK_PREROLL_LOCK
 #undef GST_BASE_SINK_PREROLL_LOCK
-#define GST_BASE_SINK_PREROLL_LOCK(obj)                                           \
-    {                                                                  \
+#define GST_BASE_SINK_PREROLL_LOCK(obj)                                   \
+    {                                                                     \
         GST_DEBUG("dbg basesink preroll lock | aml | locking | %p", obj); \
-        g_mutex_lock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                        \
-        GST_DEBUG("dbg basesink preroll lock | aml | locked  | %p", obj);  \
+        g_mutex_lock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                \
+        GST_DEBUG("dbg basesink preroll lock | aml | locked  | %p", obj); \
     }
 #endif
 
 #ifdef GST_BASE_SINK_PREROLL_UNLOCK
 #undef GST_BASE_SINK_PREROLL_UNLOCK
-#define GST_BASE_SINK_PREROLL_UNLOCK(obj)                                          \
-    {                                                                   \
+#define GST_BASE_SINK_PREROLL_UNLOCK(obj)                                   \
+    {                                                                       \
         GST_DEBUG("dbg basesink preroll lock | aml | unlocking | %p", obj); \
-        g_mutex_unlock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                       \
-        GST_DEBUG("dbg basesink preroll lock | aml | unlocked  | %p", obj);  \
+        g_mutex_unlock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                \
+        GST_DEBUG("dbg basesink preroll lock | aml | unlocked  | %p", obj); \
     }
 #endif
 
@@ -218,6 +218,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
 static gboolean gst_aml_video_sink_send_event(GstElement *element, GstEvent *event);
 
 /* private interface define */
+static gboolean gst_aml_video_sink_check_buf(GstAmlVideoSink *sink, GstBuffer *buffer);
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
 void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
 int gst_render_val_callback(void *userData, int key, void *value);
@@ -295,11 +296,11 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                             "Window Set Format: x,y,width,height",
                             NULL, G_PARAM_WRITABLE));
 
-      g_object_class_install_property (
+    g_object_class_install_property(
         G_OBJECT_CLASS(klass), PROP_RES_USAGE,
-        g_param_spec_int ("res-usage", "res-usage",
-                          "Flags to indicate intended usage",
-                          G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
+        g_param_spec_int("res-usage", "res-usage",
+                         "Flags to indicate intended usage",
+                         G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
 
 #if GST_IMPORT_LGE_PROP
     g_object_class_install_property(
@@ -674,12 +675,13 @@ gst_aml_video_sink_change_state(GstElement *element,
     {
         if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
         {
+            GST_OBJECT_UNLOCK(sink);
             GstBaseSink *basesink;
             basesink = GST_BASE_SINK(sink);
-            GST_BASE_SINK_PREROLL_LOCK (basesink);
+            GST_BASE_SINK_PREROLL_LOCK(basesink);
             basesink->have_preroll = 1;
-            GST_BASE_SINK_PREROLL_UNLOCK (basesink);
-            GST_DEBUG_OBJECT(sink, "1 set have preroll to true");
+            GST_BASE_SINK_PREROLL_UNLOCK(basesink);
+            GST_OBJECT_LOCK(sink);
         }
         break;
     }
@@ -739,6 +741,9 @@ gst_aml_video_sink_change_state(GstElement *element,
     default:
         break;
     }
+
+    gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
+
     GST_OBJECT_UNLOCK(sink);
     return ret;
 
@@ -918,7 +923,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     // TODO should call tunnel lib flush func
     if (sink_priv->is_flushing)
     {
-        gst_buffer_unref(buffer);
+        // gst_buffer_unref(buffer);
         if (render_flush(sink_priv->render_device_handle) == 0)
         {
             GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
@@ -958,6 +963,12 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         sink_priv->video_info_changed = FALSE;
     }
 
+    if (!gst_aml_video_sink_check_buf(sink, buffer))
+    {
+        GST_ERROR_OBJECT(sink, "buf out of segment return");
+        goto ret;
+    }
+
     tunnel_lib_buf_wrap = render_allocate_render_buffer_wrap(sink_priv->render_device_handle, BUFFER_FLAG_EXTER_DMA_BUFFER, 0);
     if (!tunnel_lib_buf_wrap)
     {
@@ -980,7 +991,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
 
     sink->queued++;
     gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
-    GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued ok, queued:%d", buffer, sink->queued);
+    GST_DEBUG_OBJECT(sink, "GstBuffer:%p, pts: %" GST_TIME_FORMAT " queued ok, queued:%d", buffer, GST_TIME_ARGS(GST_BUFFER_PTS(buffer)), sink->queued);
     return ret;
 
 error:
@@ -1001,7 +1012,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(parent);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
 
-    GST_DEBUG_OBJECT (sink, "received event %p %" GST_PTR_FORMAT, event, event);
+    GST_DEBUG_OBJECT(sink, "received event %p %" GST_PTR_FORMAT, event, event);
 
     switch (GST_EVENT_TYPE(event))
     {
@@ -1056,7 +1067,7 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     case GST_EVENT_CUSTOM_DOWNSTREAM:
     case GST_EVENT_CUSTOM_DOWNSTREAM_STICKY:
     {
-        if (gst_event_has_name (event, "IS_SVP"))
+        if (gst_event_has_name(event, "IS_SVP"))
         {
             GST_OBJECT_LOCK(sink);
             GST_DEBUG_OBJECT(sink, "Got SVP Event");
@@ -1084,7 +1095,6 @@ static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, Gst
     default:
     {
         break;
-
     }
     }
 
@@ -1154,6 +1164,81 @@ static gboolean gst_aml_video_sink_send_event(GstElement *element, GstEvent *eve
 }
 
 /* private interface definition */
+static gboolean gst_aml_video_sink_check_buf(GstAmlVideoSink *sink, GstBuffer *buf)
+{
+    gboolean ret = TRUE;
+    GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+    guint64 start, stop;
+    guint64 cstart, cstop;
+    GstSegment *segment;
+    GstClockTime duration;
+
+    /* Check for clipping */
+    start = GST_BUFFER_PTS(buf);
+    duration = GST_BUFFER_DURATION(buf);
+    stop = GST_CLOCK_TIME_NONE;
+
+    if (GST_CLOCK_TIME_IS_VALID (start) && GST_CLOCK_TIME_IS_VALID (duration))
+    {
+        stop = start + duration;
+    }
+    else if (GST_CLOCK_TIME_IS_VALID (start) && !GST_CLOCK_TIME_IS_VALID (duration))
+    {
+        if (sink_priv->video_info.fps_n != 0)
+        {
+            //TODO calc with framerate
+            stop = start + 40 * GST_MSECOND;
+        }
+        else
+        {
+            /* If we don't clip away buffers that far before the segment we
+            * can cause the pipeline to lockup. This can happen if audio is
+            * properly clipped, and thus the audio sink does not preroll yet
+            * but the video sink prerolls because we already outputted a
+            * buffer here... and then queues run full.
+            *
+            * In the worst case we will clip one buffer too many here now if no
+            * framerate is given, no buffer duration is given and the actual
+            * framerate is lower than 25fps */
+            stop = start + 40 * GST_MSECOND;
+        }
+    }
+
+    segment = &sink_priv->segment;
+    GST_LOG_OBJECT(sink, "check buffer start: %" GST_TIME_FORMAT " stop %" GST_TIME_FORMAT "fps_n:%d, fps_d:%d",
+                         GST_TIME_ARGS(start), GST_TIME_ARGS(stop), sink_priv->video_info.fps_n, sink_priv->video_info.fps_d);
+    if (gst_segment_clip(segment, GST_FORMAT_TIME, start, stop, &cstart, &cstop))
+    {
+        GST_BUFFER_PTS(buf) = cstart;
+
+        if (stop != GST_CLOCK_TIME_NONE && GST_CLOCK_TIME_IS_VALID(duration))
+            GST_BUFFER_DURATION(buf) = cstop - cstart;
+
+        GST_LOG_OBJECT(sink,
+                       "accepting buffer inside segment: %" GST_TIME_FORMAT " %" GST_TIME_FORMAT " seg %" GST_TIME_FORMAT " to %" GST_TIME_FORMAT
+                       " time %" GST_TIME_FORMAT,
+                       GST_TIME_ARGS(cstart),
+                       GST_TIME_ARGS(cstop),
+                       GST_TIME_ARGS(segment->start), GST_TIME_ARGS(segment->stop),
+                       GST_TIME_ARGS(segment->time));
+    }
+    else
+    {
+        GST_LOG_OBJECT(sink,
+                       "dropping buffer outside segment: %" GST_TIME_FORMAT
+                       " %" GST_TIME_FORMAT
+                       " seg %" GST_TIME_FORMAT " to %" GST_TIME_FORMAT
+                       " time %" GST_TIME_FORMAT,
+                       GST_TIME_ARGS(start), GST_TIME_ARGS(stop),
+                       GST_TIME_ARGS(segment->start),
+                       GST_TIME_ARGS(segment->stop), GST_TIME_ARGS(segment->time));
+
+        ret = FALSE;
+    }
+
+    return ret;
+}
+
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
 {
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
@@ -1410,7 +1495,7 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
     {
         sink_priv->mediasync_instanceid = gst_aml_clock_get_session_id(amlclock);
         GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d, from aml audio clock:%p. in aml audio sink:%p", sink_priv->mediasync_instanceid, amlclock, vsink);
-        gst_object_unref (amlclock);
+        gst_object_unref(amlclock);
         GST_DEBUG_OBJECT(vsink, "unref clock");
         if (sink_priv->mediasync_instanceid == -1)
         {
@@ -1606,7 +1691,7 @@ static void gst_aml_video_sink_dump_stat(GstAmlVideoSink *sink, const gchar *fil
     if ((out = fopen(full_file_name, "w")))
     {
         gchar *stat_info;
-        stat_info = g_strdup_printf("Q:%d,  Dq:%d,  Render:%d,  Drop:%d\n", sink->queued, sink->dequeued, sink->rendered, sink->droped);
+        stat_info = g_strdup_printf("Stat:%d | Q:%d,  Dq:%d,  Render:%d,  Drop:%d\n", GST_STATE(sink), sink->queued, sink->dequeued, sink->rendered, sink->droped);
         fputs(stat_info, out);
         g_free(stat_info);
         fclose(out);

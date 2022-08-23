@@ -404,10 +404,7 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         GST_OBJECT_LOCK(sink);
         GST_DEBUG_OBJECT(sink, "app get frame drop num | queued:%d, dequeued:%d, droped:%d, rendered:%d",
                          sink->queued, sink->dequeued, sink->droped, sink->rendered);
-        if (sink->droped < 10)
-            g_value_set_int(value, 0);
-        else
-            g_value_set_int(value, sink->droped);
+        g_value_set_int(value, sink->droped);
         GST_OBJECT_UNLOCK(sink);
         break;
 #if GST_IMPORT_LGE_PROP

@@ -1,0 +1,12 @@
+Major_V=1
+Minor_V=2
+BaseChangeId=I175507df652863ac34584a045f0a4cc7881d9d66
+
+#history version
+#V1.1.64 Release Notes
+#Release_ChangeId_V1_1=Id02a20ec4f6374a64ee7fa0576b97e9eb8e66bed
+#handle custom sticky event
+#fix preroll deadlock
+#deep copy failed if fd is secure_mode
+#deal with seek preroll
+#double free event

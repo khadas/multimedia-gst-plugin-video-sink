@@ -100,6 +100,7 @@ enum
     PROP_VIDEO_FRAME_DROP_NUM,
     PROP_WINDOW_SET,
     PROP_RES_USAGE,
+    PROP_DISPLAY_OUTPUT,
 #if GST_IMPORT_LGE_PROP
     PROP_LGE_RESOURCE_INFO,
     PROP_LGE_CURRENT_PTS,
@@ -302,6 +303,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                          "Flags to indicate intended usage",
                          G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
 
+    g_object_class_install_property(
+        G_OBJECT_CLASS(klass), PROP_DISPLAY_OUTPUT,
+        g_param_spec_int("display-output", "display output index",
+                         "display output index, 0 is primary output and default value; 1 is extend display output",
+                         G_MININT, G_MAXINT, 0, G_PARAM_READWRITE));
+
 #if GST_IMPORT_LGE_PROP
     g_object_class_install_property(
         G_OBJECT_CLASS(klass), PROP_LGE_RESOURCE_INFO,
@@ -364,6 +371,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->droped = 0;
     sink->avsync_mode = GST_DEFAULT_AVSYNC_MODE;
     sink->pip_mode = 0;
+    sink->display_output_index = 0;
     sink->secure_mode = FALSE;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
@@ -407,6 +415,13 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         g_value_set_int(value, sink->droped);
         GST_OBJECT_UNLOCK(sink);
         break;
+    case PROP_DISPLAY_OUTPUT:
+    {
+        GST_OBJECT_LOCK(sink);
+        g_value_set_int(value, sink->display_output_index);
+        GST_OBJECT_UNLOCK(sink);
+        break;
+    }
 #if GST_IMPORT_LGE_PROP
     case PROP_LGE_CURRENT_PTS:
     {
@@ -507,6 +522,23 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         GST_OBJECT_LOCK(sink);
         sink->pip_mode = 1;
         GST_DEBUG_OBJECT(sink, "play video in sub layer(pip)");
+        GST_OBJECT_UNLOCK(sink);
+        break;
+    }
+    case PROP_DISPLAY_OUTPUT:
+    {
+        GST_OBJECT_LOCK(sink);
+        gint index = g_value_get_int(value);
+        if (index == 0 || index == 1)
+        {
+            sink->display_output_index = index;
+            if (sink_priv->render_device_handle)
+            {
+                if (render_set(sink_priv->render_device_handle, KEY_SELECT_DISPLAY_OUTPUT, &sink->display_output_index) == -1)
+                    GST_ERROR_OBJECT(sink, "render lib update output index error");
+            }
+        }
+        GST_DEBUG_OBJECT(sink, "update display output index to:%d", sink->display_output_index);
         GST_OBJECT_UNLOCK(sink);
         break;
     }
@@ -647,6 +679,12 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_READY_TO_PAUSED:
     {
+
+        if (render_set(sink_priv->render_device_handle, KEY_SELECT_DISPLAY_OUTPUT, &sink->display_output_index) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib first set output index error");
+            goto error;
+        }
         if (render_connect(sink_priv->render_device_handle) == -1)
         {
             GST_ERROR_OBJECT(sink, "render lib connect device fail");

@@ -56,6 +56,7 @@ struct _GstAmlVideoSink
   gint dequeued;
   gint rendered;
   gint droped;
+  gboolean default_sync;
   gint avsync_mode;
   gboolean pip_mode;
   gint display_output_index;

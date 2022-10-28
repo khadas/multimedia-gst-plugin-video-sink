@@ -96,6 +96,7 @@ enum
     PROP_0,
     PROP_FULLSCREEN,
     PROP_SETMUTE,
+    PROP_DEFAULT_SYNC,
     PROP_AVSYNC_MODE,
     PROP_VIDEO_FRAME_DROP_NUM,
     PROP_WINDOW_SET,
@@ -274,6 +275,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     g_object_class_install_property(
+        gobject_class, PROP_DEFAULT_SYNC,
+        g_param_spec_boolean("set-sync", "use basesink avsync",
+                             "Whether use basesink sync flow. Configure when make element ",
+                             FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+    g_object_class_install_property(
         gobject_class, PROP_SETMUTE,
         g_param_spec_boolean("set mute", "set mute params",
                              "Whether set screen mute ",
@@ -370,6 +377,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->rendered = 0;
     sink->droped = 0;
     sink->avsync_mode = GST_DEFAULT_AVSYNC_MODE;
+    sink->default_sync = FALSE;
     sink->pip_mode = 0;
     sink->display_output_index = 0;
     sink->secure_mode = FALSE;
@@ -401,6 +409,11 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
     case PROP_SETMUTE:
         GST_OBJECT_LOCK(sink);
         g_value_set_boolean(value, sink_priv->mute);
+        GST_OBJECT_UNLOCK(sink);
+        break;
+    case PROP_DEFAULT_SYNC:
+        GST_OBJECT_LOCK(sink);
+        g_value_set_boolean(value, sink->default_sync);
         GST_OBJECT_UNLOCK(sink);
         break;
     case PROP_AVSYNC_MODE:
@@ -466,6 +479,15 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         }
         GST_OBJECT_UNLOCK(sink);
         break;
+    case PROP_DEFAULT_SYNC:
+    {
+        GST_OBJECT_LOCK(sink);
+        sink->default_sync = g_value_get_boolean(value);
+        GST_OBJECT_UNLOCK(sink);
+        gst_base_sink_set_sync(sink, sink->default_sync);
+        GST_DEBUG_OBJECT(sink, "use basessink avsync flow %d", sink->default_sync);
+        break;
+    }
     case PROP_AVSYNC_MODE:
         GST_OBJECT_LOCK(sink);
         gint mode = g_value_get_int(value);
@@ -685,11 +707,19 @@ gst_aml_video_sink_change_state(GstElement *element,
             GST_ERROR_OBJECT(sink, "render lib first set output index error");
             goto error;
         }
+
         if (render_connect(sink_priv->render_device_handle) == -1)
         {
             GST_ERROR_OBJECT(sink, "render lib connect device fail");
             goto error;
         }
+
+        if (render_set(sink_priv->render_device_handle, KEY_IMMEDIATELY_OUTPUT, &sink->default_sync) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib set immediately output error");
+            goto error;
+        }
+
         if (render_pause(sink_priv->render_device_handle) == -1)
         {
             GST_ERROR_OBJECT(sink, "render lib pause device fail when first into paused state");

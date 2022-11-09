@@ -216,7 +216,7 @@ static GstCaps *gst_aml_video_sink_get_caps(GstBaseSink *bsink,
                                             GstCaps *filter);
 static gboolean gst_aml_video_sink_set_caps(GstBaseSink *bsink, GstCaps *caps);
 static gboolean gst_aml_video_sink_show_frame(GstVideoSink *bsink, GstBuffer *buffer);
-static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, GstEvent *event);
+static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *event);
 static gboolean gst_aml_video_sink_send_event(GstElement *element, GstEvent *event);
 
 /* private interface define */
@@ -265,6 +265,7 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
     gstbasesink_class->propose_allocation = GST_DEBUG_FUNCPTR(gst_aml_video_sink_propose_allocation);
     gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR(gst_aml_video_sink_get_caps);
     gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR(gst_aml_video_sink_set_caps);
+    gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_aml_video_sink_pad_event);
 
     gstvideosink_class->show_frame = GST_DEBUG_FUNCPTR(gst_aml_video_sink_show_frame);
 
@@ -384,8 +385,6 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
-    gst_pad_set_event_function(basesink->sinkpad, gst_aml_video_sink_pad_event);
-
     GST_AML_VIDEO_SINK_GET_PRIVATE(sink) = malloc(sizeof(GstAmlVideoSinkPrivate));
     gst_aml_video_sink_reset_private(sink);
     gst_base_sink_set_sync(basesink, FALSE);
@@ -484,7 +483,7 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         GST_OBJECT_LOCK(sink);
         sink->default_sync = g_value_get_boolean(value);
         GST_OBJECT_UNLOCK(sink);
-        gst_base_sink_set_sync(sink, sink->default_sync);
+        gst_base_sink_set_sync(GST_BASE_SINK(sink), sink->default_sync);
         GST_DEBUG_OBJECT(sink, "use basessink avsync flow %d", sink->default_sync);
         break;
     }
@@ -766,8 +765,8 @@ gst_aml_video_sink_change_state(GstElement *element,
     {
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
     {
-        GstBaseSink *basesink;
-        basesink = GST_BASE_SINK(sink);
+        // GstBaseSink *basesink;
+        // basesink = GST_BASE_SINK(sink);
 
         if (render_pause(sink_priv->render_device_handle) == -1)
         {
@@ -889,7 +888,6 @@ static GstCaps *gst_aml_video_sink_get_caps(GstBaseSink *bsink,
 
     caps = gst_pad_get_pad_template_caps(GST_VIDEO_SINK_PAD(sink));
     caps = gst_caps_make_writable(caps);
-    // TODO 这里是需要从template直接取出支持的caps还是要通过tunnel lib拿到caps？
 
     if (filter)
     {
@@ -900,6 +898,8 @@ static GstCaps *gst_aml_video_sink_get_caps(GstBaseSink *bsink,
         gst_caps_unref(caps);
         caps = intersection;
     }
+    GST_DEBUG_OBJECT(sink, "filter caps: %" GST_PTR_FORMAT, filter);
+    GST_DEBUG_OBJECT(sink, "final  caps: %" GST_PTR_FORMAT, caps);
 
     return caps;
 }
@@ -1071,10 +1071,10 @@ ret:
     return ret;
 }
 
-static gboolean gst_aml_video_sink_pad_event(GstPad *pad, GstObject *parent, GstEvent *event)
+static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *event)
 {
     gboolean result = TRUE;
-    GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(parent);
+    GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(basesink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
 
     GST_DEBUG_OBJECT(sink, "received event %p %" GST_PTR_FORMAT, event, event);

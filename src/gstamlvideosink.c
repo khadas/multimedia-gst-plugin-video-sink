@@ -390,6 +390,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     gst_base_sink_set_sync(basesink, FALSE);
 
     gst_base_sink_set_qos_enabled(basesink, FALSE);
+    gst_base_sink_set_last_sample_enabled(basesink, FALSE);
 }
 
 static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,

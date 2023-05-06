@@ -743,9 +743,9 @@ gst_aml_video_sink_change_state(GstElement *element,
             GST_OBJECT_UNLOCK(sink);
             GstBaseSink *basesink;
             basesink = GST_BASE_SINK(sink);
-            GST_BASE_SINK_PREROLL_LOCK(basesink);
+            //GST_BASE_SINK_PREROLL_LOCK(basesink);
             basesink->have_preroll = 1;
-            GST_BASE_SINK_PREROLL_UNLOCK(basesink);
+            //GST_BASE_SINK_PREROLL_UNLOCK(basesink);
             GST_OBJECT_LOCK(sink);
         }
         break;
@@ -1555,23 +1555,18 @@ static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
         GST_DEBUG_OBJECT(vsink, "pipeline don't have audio sink element");
         return FALSE;
     }
-    GstClock *amlclock = gst_aml_hal_asink_get_clock((GstElement *)asink);
     gboolean ret = TRUE;
-    if (amlclock)
+    GParamSpec* spec = NULL;
+    spec = g_object_class_find_property(G_OBJECT_GET_CLASS(G_OBJECT(asink)), "avsync-session");
+    GST_DEBUG_OBJECT(vsink, "check amlhalasink has avsync-session property %p", spec);
+    if (spec)
+        g_object_get (G_OBJECT(asink), "avsync-session", &sink_priv->mediasync_instanceid, NULL);
+
+    GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d, from amlhalasink:%p", sink_priv->mediasync_instanceid, asink);
+
+    if (sink_priv->mediasync_instanceid == -1)
     {
-        sink_priv->mediasync_instanceid = gst_aml_clock_get_session_id(amlclock);
-        GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d, from aml audio clock:%p. in aml audio sink:%p", sink_priv->mediasync_instanceid, amlclock, vsink);
-        gst_object_unref(amlclock);
-        GST_DEBUG_OBJECT(vsink, "unref clock");
-        if (sink_priv->mediasync_instanceid == -1)
-        {
-            GST_ERROR_OBJECT(vsink, "audio sink: don't have valid mediasync instance id");
-            ret = FALSE;
-        }
-    }
-    else
-    {
-        GST_WARNING_OBJECT(vsink, "no clock: vmaster mode");
+        GST_ERROR_OBJECT(vsink, "audio sink: don't have valid mediasync instance id");
         ret = FALSE;
     }
     gst_object_unref(asink);

@@ -21,7 +21,7 @@ libgstamlvideosink_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 
 libgstamlvideosink_la_LIBADD = $(GST_LIBS)
 libgstamlvideosink_la_LIBADD += -L$(TARGET_DIR)/usr/lib  -lmediahal_videorender 
-libgstamlvideosink_la_LIBADD += -L$(TARGET_DIR)/usr/lib/gstreamer-1.0   -lgstamlhalasink -lmediahal_videorender -lgstvideo-1.0 -lgstdrmbufferpool -lgstdrmallocator 
+libgstamlvideosink_la_LIBADD += -L$(TARGET_DIR)/usr/lib/gstreamer-1.0 -lmediahal_videorender -lgstvideo-1.0 -lgstdrmbufferpool -lgstdrmallocator 
 libgstamlvideosink_la_LIBTOOLFLAGS = --tag=disable-static
 
 # headers we need but don't want installed

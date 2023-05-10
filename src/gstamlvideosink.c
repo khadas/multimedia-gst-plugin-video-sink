@@ -38,6 +38,7 @@
 #include "gstamlclock.h"
 #include "gstamlhalasink_new.h"
 #include <stdio.h>
+#include <unistd.h>
 // #endif
 // #endif
 
@@ -233,6 +234,7 @@ static gboolean gst_render_set_params(GstVideoSink *vsink);
 static void gst_emit_eos_signal(GstAmlVideoSink *vsink);
 static void gst_wait_eos_signal(GstAmlVideoSink *vsink);
 static void gst_aml_video_sink_dump_stat(GstAmlVideoSink *sink, const gchar *file_name);
+static gpointer EOSDetectionThread(gpointer data);
 
 /* public interface definition */
 static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
@@ -382,6 +384,8 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->pip_mode = 0;
     sink->display_output_index = 0;
     sink->secure_mode = FALSE;
+    sink->eosDetectionThread = NULL;
+    sink->quitEOSDetectionThread = FALSE;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -729,6 +733,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
     {
+        sink->videoPlaying = TRUE;
         if (render_resume(sink_priv->render_device_handle) == -1)
         {
             GST_ERROR_OBJECT(sink, "render lib resume device fail");
@@ -738,6 +743,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
     {
+        sink->videoPlaying = FALSE;
         if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
         {
             GST_OBJECT_UNLOCK(sink);
@@ -782,6 +788,12 @@ gst_aml_video_sink_change_state(GstElement *element,
     }
     case GST_STATE_CHANGE_PAUSED_TO_READY:
     {
+        if ( sink->eosDetectionThread )
+        {
+            sink->quitEOSDetectionThread= TRUE;
+            g_thread_join(sink->eosDetectionThread);
+            sink->eosDetectionThread= NULL;
+        }
         GST_DEBUG_OBJECT(sink, "before disconnect rlib");
         if (render_disconnect(sink_priv->render_device_handle) == -1)
         {
@@ -1058,6 +1070,12 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     sink->queued++;
     gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
     GST_DEBUG_OBJECT(sink, "GstBuffer:%p, pts: %" GST_TIME_FORMAT " queued ok, queued:%d", buffer, GST_TIME_ARGS(GST_BUFFER_PTS(buffer)), sink->queued);
+    sink->quitEOSDetectionThread = FALSE;
+    if (sink->eosDetectionThread == NULL )
+    {
+        GST_DEBUG_OBJECT(sink, "start eos detect thread");
+        sink->eosDetectionThread= g_thread_new("video_sink_eos", EOSDetectionThread, sink);
+    }
     return ret;
 
 error:
@@ -1149,15 +1167,39 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
         sink_priv->got_eos = TRUE;
         GST_OBJECT_UNLOCK(sink);
 
+        //some frames aren't displayed,so don't pass this event to basesink
         if (sink->queued > sink->rendered + sink->droped)
         {
-            GST_DEBUG_OBJECT(sink, "need waitting display render all buf, queued:%d, rendered:%d, droped:%d",
+            GST_DEBUG_OBJECT(sink, "display render all buf, queued:%d, rendered:%d, droped:%d",
                              sink->queued,
                              sink->rendered,
                              sink->droped);
-            gst_wait_eos_signal(sink);
+            gst_event_unref(event);
+            return result;
         }
     }
+    case GST_EVENT_CAPS:
+    {
+        GstCaps *caps;
+        GstStructure *structure;
+        gst_event_parse_caps(event, &caps);
+
+        structure= gst_caps_get_structure(caps, 0);
+        if (structure)
+        {
+            gint num, denom;
+            if (gst_structure_get_fraction( structure, "framerate", &num, &denom ))
+            {
+                if ( denom == 0 ) denom= 1;
+                sink->frameRate= (double)num/(double)denom;
+                if ( sink->frameRate <= 0.0 )
+                {
+                    GST_DEBUG_OBJECT(sink, "caps have framerate of 0 - assume 60");
+                    sink->frameRate= 60.0;
+                }
+            }
+        }
+    } break;
     default:
     {
         break;
@@ -1328,13 +1370,13 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
     case MSG_DROPED_BUFFER:
     case MSG_DISPLAYED_BUFFER:
     {
-        GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
         RenderBuffer *tunnel_lib_buf_wrap = (RenderBuffer *)msg;
         RenderDmaBuffer *dmabuf = &tunnel_lib_buf_wrap->dma;
         GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->priv;
         if (buffer)
         {
             sink->last_displayed_buf_pts = GST_BUFFER_PTS(buffer);
+            GST_LOG_OBJECT(sink, "get message: MSG_DISPLAYED_BUFFER from tunnel lib");
             if (type == MSG_DROPED_BUFFER)
             {
                 GST_LOG_OBJECT(sink, "get message: MSG_DROPED_BUFFER from tunnel lib");
@@ -1351,10 +1393,6 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
                              dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
                              buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->droped, sink->rendered);
             gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
-            if ((sink_priv->got_eos || sink_priv->is_flushing) && sink->queued == sink->rendered + sink->droped)
-            {
-                gst_emit_eos_signal(sink);
-            }
         }
         else
         {
@@ -1730,6 +1768,70 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
     }
 
     return TRUE;
+}
+
+static gpointer EOSDetectionThread(gpointer data)
+{
+    GstAmlVideoSink *sink = (GstAmlVideoSink *)data;
+    GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+    int eosCountDown;
+    GST_DEBUG("VideoEOSThread: enter");
+
+    eosCountDown = 2;
+    while (!sink->quitEOSDetectionThread )
+    {
+        usleep(1000000/sink->frameRate);
+        if (sink->videoPlaying && sink_priv->got_eos)
+        {
+            if (sink->queued == sink->rendered + sink->droped)
+            {
+                --eosCountDown;
+                if ( eosCountDown == 0 )
+                {
+                    GST_DEBUG("EOS detected");
+                    GstBaseSink *bs;
+                    bs= GST_BASE_SINK(sink);
+                    GST_BASE_SINK_PREROLL_LOCK(bs);
+                    GST_DEBUG("EOS: need_preroll %d have_preroll %d", bs->need_preroll, bs->have_preroll);
+                    if ( bs->need_preroll )
+                    {
+                        GstState cur, nxt, pend;
+                        /* complete preroll and commit state */
+                        GST_DEBUG("EOS signal preroll\n");
+                        bs->need_preroll= FALSE;
+                        bs->have_preroll= TRUE;
+                        GST_OBJECT_LOCK(bs);
+                        cur= GST_STATE(bs);
+                        nxt= GST_STATE_NEXT(bs);
+                        GST_STATE(bs)= pend= GST_STATE_PENDING(bs);
+                        GST_STATE_NEXT(bs)= GST_STATE_PENDING(bs)= GST_STATE_VOID_PENDING;
+                        GST_STATE_RETURN(bs)= GST_STATE_CHANGE_SUCCESS;
+                        GST_OBJECT_UNLOCK(bs);
+                        GST_DEBUG("EOS posting state change: curr(%s) next(%s) pending(%s)",
+                                gst_element_state_get_name(cur),
+                                gst_element_state_get_name(nxt),
+                                gst_element_state_get_name(pend));
+                        gst_element_post_message(GST_ELEMENT_CAST(bs), gst_message_new_state_changed(GST_OBJECT_CAST(bs), cur, nxt, pend));
+                        GST_DEBUG("EOS posting async done");
+                        gst_element_post_message(GST_ELEMENT_CAST(bs), gst_message_new_async_done(GST_OBJECT_CAST(bs), GST_CLOCK_TIME_NONE));
+                        GST_STATE_BROADCAST(bs)
+                    }
+                    GST_BASE_SINK_PREROLL_UNLOCK(bs);
+                    GST_DEBUG("EOS: calling eos detected: need_preroll %d have_preroll %d", bs->need_preroll, bs->have_preroll);
+                    gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+                    GST_DEBUG("EOS: done calling eos detected,posted eos msg, need_preroll %d have_preroll %d", bs->need_preroll, bs->have_preroll);
+                    break;
+               }
+            }
+            else
+            {
+                eosCountDown = 2;
+            }
+        }
+    }
+
+    GST_DEBUG("VideoEOSThread: exit");
+    return NULL;
 }
 
 static void gst_aml_video_sink_dump_stat(GstAmlVideoSink *sink, const gchar *file_name)

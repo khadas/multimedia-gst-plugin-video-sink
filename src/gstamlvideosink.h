@@ -62,10 +62,10 @@ struct _GstAmlVideoSink
   gint display_output_index;
   GMutex eos_lock;
   GCond eos_cond;
-  gboolean quitEOSDetectionThread;
-  GThread *eosDetectionThread;
-  double frameRate;
-  gboolean videoPlaying;
+  gboolean quit_eos_detect_thread;
+  GThread *eos_detect_thread_handle;
+  double frame_rate;
+  gboolean video_playing;
 
   gboolean secure_mode;
 

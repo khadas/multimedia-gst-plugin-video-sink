@@ -135,6 +135,8 @@ enum
 #define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY 1
 #define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE 1
 #define DRMBP_UNLIMIT_MAX_BUFSIZE 0
+#define GST_AML_WAIT_FENCE 8
+#define GST_AML_WAIT_TIME  5000
 
 typedef struct _GstAmlVideoSinkWindowSet
 {
@@ -227,6 +229,7 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
 int gst_render_val_callback(void *userData, int key, void *value);
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink);
+static void gst_aml_video_sink_wait_fence (GstAmlVideoSink *sink);
 #if GST_USE_PLAYBIN
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
 #endif
@@ -963,6 +966,28 @@ done:
     return ret;
 }
 
+static void gst_aml_video_sink_wait_fence (GstAmlVideoSink *sink)
+{
+    guint q_num = 0;
+    guint dq_num = 0;
+
+    GST_OBJECT_LOCK(sink);
+    q_num = sink->queued;
+    dq_num = sink->dequeued;
+    GST_OBJECT_UNLOCK(sink);
+
+    while ((q_num - dq_num > GST_AML_WAIT_FENCE) && sink->video_playing)
+    {
+        g_usleep(GST_AML_WAIT_TIME);
+        GST_TRACE_OBJECT(sink, "wait fence condition update: q_num %d , dq_num %d",q_num , dq_num);
+        GST_OBJECT_LOCK(sink);
+        q_num = sink->queued;
+        dq_num = sink->dequeued;
+        GST_OBJECT_UNLOCK(sink);
+    }
+    return;
+}
+
 static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffer *buffer)
 {
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
@@ -1060,6 +1085,9 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     }
 
     GST_OBJECT_UNLOCK(vsink);
+
+    //Set fence to control the speed of sending buffer
+    gst_aml_video_sink_wait_fence(sink);
 
     if (render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == -1)
     {

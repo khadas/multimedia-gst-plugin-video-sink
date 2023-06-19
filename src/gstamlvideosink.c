@@ -1861,6 +1861,12 @@ static gpointer eos_detection_thread(gpointer data)
         }
     }
 
+    if (!sink->quit_eos_detect_thread)
+    {
+        GThread *thread= sink->eos_detect_thread_handle;
+        g_thread_unref( sink->eos_detect_thread_handle );
+        sink->eos_detect_thread_handle= NULL;
+    }
     GST_DEBUG("eos_detection_thread: exit");
     return NULL;
 }

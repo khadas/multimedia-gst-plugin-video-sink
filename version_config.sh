@@ -8,14 +8,17 @@ echo $BASE
 #major version
 MAJORVERSION=1
 
-#minor version
-MINORVERSION=2
+#current minor version,if release a new version,please update it
+MINORVERSION=3
+
+#last release version commit id,please store commit id here every release version
+RELEASE_COMMIT_ID=bcd880e8
 
 #modue name/
 MODULE_NAME=MM-module-name:gst-plugin-video-sink
 
-#get all commit count
-COMMIT_COUNT=$(git rev-list HEAD --count)
+#get all commit count from last release version
+COMMIT_COUNT=$(git rev-list $RELEASE_COMMIT_ID..HEAD --count)
 echo commit count $COMMIT_COUNT
 
 #get current commit id
@@ -28,6 +31,7 @@ MODULE_NAME_LINE=`sed -n '/\"MM-module-name/=' src/aml_version.h`
 
 #version rule string
 VERSION_STRING=${MAJORVERSION}.${MINORVERSION}.${COMMIT_COUNT}-g${COMMIT_ID}
+echo version: $VERSION_STRING
 
 #update the original version
 if [ ${MODULE_NAME_LINE} -gt 0 ]; then

@@ -1,8 +1,16 @@
 Major_V=1
-Minor_V=2
-BaseChangeId=I175507df652863ac34584a045f0a4cc7881d9d66
+Minor_V=3
+BaseChangeId=I9f9c96d7cf21ca0cf354ebaa145b8ae9e04c1acc
 
-#history version
+#V1.2.13 Release Notes
+#Release_ChangeId_V1_2=I9f9c96d7cf21ca0cf354ebaa145b8ae9e04c1acc
+#removes amlasink dependency
+#destroy eos detect thread
+#refine eos
+#set the fence to control the speed of sending buffer
+#add output index for renderlib
+#reduce buf num
+
 #V1.1.64 Release Notes
 #Release_ChangeId_V1_1=Id02a20ec4f6374a64ee7fa0576b97e9eb8e66bed
 #handle custom sticky event

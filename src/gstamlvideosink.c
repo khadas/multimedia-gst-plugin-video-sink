@@ -135,8 +135,8 @@ enum
 #define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY 1
 #define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE 1
 #define DRMBP_UNLIMIT_MAX_BUFSIZE 0
-#define GST_AML_WAIT_FENCE 8
 #define GST_AML_WAIT_TIME  5000
+#define GST_AML_DEFAULT_FENCE_NUM 99 // disable fence_num if set 99;
 
 typedef struct _GstAmlVideoSinkWindowSet
 {
@@ -389,6 +389,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->secure_mode = FALSE;
     sink->eos_detect_thread_handle = NULL;
     sink->quit_eos_detect_thread = FALSE;
+    sink->fence_num = GST_AML_DEFAULT_FENCE_NUM;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -975,11 +976,12 @@ static void gst_aml_video_sink_wait_fence (GstAmlVideoSink *sink)
     q_num = sink->queued;
     dq_num = sink->dequeued;
     GST_OBJECT_UNLOCK(sink);
+    GST_DEBUG_OBJECT(sink, "q_num %d , dq_num %d ,sink->fence_num %d",q_num , dq_num,sink->fence_num);
 
-    while ((q_num - dq_num > GST_AML_WAIT_FENCE) && sink->video_playing)
+    while ((q_num >= sink->fence_num + dq_num) && sink->video_playing)
     {
         g_usleep(GST_AML_WAIT_TIME);
-        GST_TRACE_OBJECT(sink, "wait fence condition update: q_num %d , dq_num %d",q_num , dq_num);
+        GST_DEBUG_OBJECT(sink, "waiting render_lib release buff......");
         GST_OBJECT_LOCK(sink);
         q_num = sink->queued;
         dq_num = sink->dequeued;
@@ -1184,6 +1186,20 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
             GST_OBJECT_LOCK(sink);
             GST_DEBUG_OBJECT(sink, "Got SVP Event");
             sink->secure_mode = TRUE;
+            GST_OBJECT_UNLOCK(sink);
+        }
+
+        if (gst_event_has_name(event, "video_fence"))
+        {
+            guint fence_num;
+            GST_OBJECT_LOCK(sink);
+            GST_DEBUG_OBJECT(sink, "Got video_fence Event");
+            const GstStructure *s = gst_event_get_structure(event);
+            if (s)
+            {
+                gst_structure_get_uint(s,"fence_num",&fence_num);
+                sink->fence_num = fence_num;
+            }
             GST_OBJECT_UNLOCK(sink);
         }
         gst_event_unref(event);

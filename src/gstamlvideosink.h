@@ -68,6 +68,7 @@ struct _GstAmlVideoSink
   gboolean video_playing;
 
   gboolean secure_mode;
+  guint fence_num;
 
   GstAmlVideoSinkPrivate *priv;
 };

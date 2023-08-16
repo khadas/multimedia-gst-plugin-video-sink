@@ -31,7 +31,7 @@
 #include <gst/gstdrmbufferpool.h>
 #include <gst/allocators/gstdmabuf.h>
 #include "gstamlvideosink.h"
-//#include <render_lib.h>
+#include <render_lib.h>
 // #ifdef USE_AMLOGIC_MESON
 // #ifdef USE_AMLOGIC_MESON_MSYNC
 // #define INVALID_SESSION_ID (16)
@@ -46,9 +46,9 @@
 #undef GST_OBJECT_LOCK
 #define GST_OBJECT_LOCK(obj)                                           \
     {                                                                  \
-        GST_DEBUG("dbg basesink ctxt lock | aml | locking | %p", obj); \
+        GST_TRACE("dbg basesink ctxt lock | aml | locking | %p", obj); \
         g_mutex_lock(GST_OBJECT_GET_LOCK(obj));                        \
-        GST_DEBUG("dbg basesink ctxt lock | aml | locked  | %p", obj); \
+        GST_TRACE("dbg basesink ctxt lock | aml | locked  | %p", obj); \
     }
 #endif
 
@@ -56,9 +56,9 @@
 #undef GST_OBJECT_UNLOCK
 #define GST_OBJECT_UNLOCK(obj)                                           \
     {                                                                    \
-        GST_DEBUG("dbg basesink ctxt lock | aml | unlocking | %p", obj); \
+        GST_TRACE("dbg basesink ctxt lock | aml | unlocking | %p", obj); \
         g_mutex_unlock(GST_OBJECT_GET_LOCK(obj));                        \
-        GST_DEBUG("dbg basesink ctxt lock | aml | unlocked  | %p", obj); \
+        GST_TRACE("dbg basesink ctxt lock | aml | unlocked  | %p", obj); \
     }
 #endif
 
@@ -66,9 +66,9 @@
 #undef GST_BASE_SINK_PREROLL_LOCK
 #define GST_BASE_SINK_PREROLL_LOCK(obj)                                   \
     {                                                                     \
-        GST_DEBUG("dbg basesink preroll lock | aml | locking | %p", obj); \
+        GST_TRACE("dbg basesink preroll lock | aml | locking | %p", obj); \
         g_mutex_lock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                \
-        GST_DEBUG("dbg basesink preroll lock | aml | locked  | %p", obj); \
+        GST_TRACE("dbg basesink preroll lock | aml | locked  | %p", obj); \
     }
 #endif
 
@@ -76,9 +76,9 @@
 #undef GST_BASE_SINK_PREROLL_UNLOCK
 #define GST_BASE_SINK_PREROLL_UNLOCK(obj)                                   \
     {                                                                       \
-        GST_DEBUG("dbg basesink preroll lock | aml | unlocking | %p", obj); \
+        GST_TRACE("dbg basesink preroll lock | aml | unlocking | %p", obj); \
         g_mutex_unlock(GST_BASE_SINK_GET_PREROLL_LOCK(obj));                \
-        GST_DEBUG("dbg basesink preroll lock | aml | unlocked  | %p", obj); \
+        GST_TRACE("dbg basesink preroll lock | aml | unlocked  | %p", obj); \
     }
 #endif
 
@@ -87,7 +87,8 @@
 /* signals */
 enum
 {
-    SIGNAL_0,
+    SIGNAL_FIRSTFRAME,
+    SIGNAL_UNDERFLOW,
     LAST_SIGNAL
 };
 
@@ -125,11 +126,6 @@ enum
 #define GST_DEFAULT_AVSYNC_MODE 1 // 0:v master, 1:a master
 #define GST_DUMP_STAT_FILENAME "amlvideosink_buf_stat"
 
-#if GST_IMPORT_LGE_PROP
-#define RENDER_DEVICE_NAME "videotunnel"
-#else
-#define RENDER_DEVICE_NAME "westeros"
-#endif
 #define USE_DMABUF TRUE
 
 #define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY 1
@@ -173,7 +169,6 @@ struct _GstAmlVideoSinkPrivate
 {
     GstAmlVideoSinkWindowSet window_set;
     GstBuffer *preroll_buffer;
-    gchar *render_device_name;
     void *render_device_handle;
     GstVideoInfo video_info;
     gboolean video_info_changed;
@@ -191,6 +186,8 @@ struct _GstAmlVideoSinkPrivate
     GstAmlVideoSinkLgeCtxt lge_ctxt;
 #endif
 };
+
+static guint g_signals[LAST_SIGNAL]= {0};
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS,
@@ -225,9 +222,9 @@ static gboolean gst_aml_video_sink_send_event(GstElement *element, GstEvent *eve
 /* private interface define */
 static gboolean gst_aml_video_sink_check_buf(GstAmlVideoSink *sink, GstBuffer *buffer);
 static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink);
-//void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
-//int gst_render_val_callback(void *userData, int key, void *value);
-//static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
+static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg);
+static int gst_render_val_callback(void *userData, int key, void *value);
+static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink);
 static void gst_aml_video_sink_wait_fence (GstAmlVideoSink *sink);
 #if GST_USE_PLAYBIN
@@ -322,6 +319,29 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                          "display output index, 0 is primary output and default value; 1 is extend display output",
                          G_MININT, G_MAXINT, 0, G_PARAM_READWRITE));
 
+    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
+                                               G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                               (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                               0,    /* class offset */
+                                               NULL, /* accumulator */
+                                               NULL, /* accu data */
+                                               g_cclosure_marshal_VOID__UINT_POINTER,
+                                               G_TYPE_NONE,
+                                               2,
+                                               G_TYPE_UINT,
+                                               G_TYPE_POINTER );
+
+    g_signals[SIGNAL_UNDERFLOW]= g_signal_new( "buffer-underflow-callback",
+                                              G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                              (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                              0,    // class offset
+                                              NULL, // accumulator
+                                              NULL, // accu data
+                                              g_cclosure_marshal_VOID__UINT_POINTER,
+                                              G_TYPE_NONE,
+                                              2,
+                                              G_TYPE_UINT,
+                                              G_TYPE_POINTER );
 #if GST_IMPORT_LGE_PROP
     g_object_class_install_property(
         G_OBJECT_CLASS(klass), PROP_LGE_RESOURCE_INFO,
@@ -564,8 +584,8 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
             sink->display_output_index = index;
             if (sink_priv->render_device_handle)
             {
-                // if (render_set(sink_priv->render_device_handle, KEY_SELECT_DISPLAY_OUTPUT, &sink->display_output_index) == -1)
-                //     GST_ERROR_OBJECT(sink, "render lib update output index error");
+                if (render_set_value(sink_priv->render_device_handle, KEY_SELECT_DISPLAY_OUTPUT, &sink->display_output_index) == -1)
+                    GST_ERROR_OBJECT(sink, "render lib update output index error");
             }
         }
         GST_DEBUG_OBJECT(sink, "update display output index to:%d", sink->display_output_index);
@@ -674,7 +694,7 @@ gst_aml_video_sink_change_state(GstElement *element,
 
     state = (GstState)GST_STATE_TRANSITION_CURRENT(transition);
     next = GST_STATE_TRANSITION_NEXT(transition);
-    GST_LOG_OBJECT(sink,
+    GST_DEBUG_OBJECT(sink,
                    "amlvideosink handler tries setting state from %s to %s (%04x)",
                    gst_element_state_get_name(state),
                    gst_element_state_get_name(next), transition);
@@ -684,23 +704,22 @@ gst_aml_video_sink_change_state(GstElement *element,
     {
     case GST_STATE_CHANGE_NULL_TO_READY:
     {
-        // sink_priv->render_device_handle = render_open(sink_priv->render_device_name);
-        // if (sink_priv->render_device_handle == NULL)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib: open device fail");
-        //     goto error;
-        // }
-        // RenderCallback cb = {gst_render_msg_callback, gst_render_val_callback};
-        // render_set_callback(sink_priv->render_device_handle, &cb);
-        // render_set_user_data(sink_priv->render_device_handle, sink);
+        sink_priv->render_device_handle = render_open();
+        if (sink_priv->render_device_handle == NULL)
+        {
+            GST_ERROR_OBJECT(sink, "render lib: open device fail");
+            goto error;
+        }
+        RenderCallback cb = {gst_render_msg_callback, gst_render_val_callback};
+        render_set_callback(sink_priv->render_device_handle, sink,  &cb);
 
-        // GST_DEBUG_OBJECT(sink, "tunnel lib: set pip mode");
-        // int pip = 1;
-        // if (sink->pip_mode && render_set(sink_priv->render_device_handle, KEY_VIDEO_PIP, &pip) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "tunnel lib: set pip error");
-        //     goto error;
-        // }
+        GST_DEBUG_OBJECT(sink, "tunnel lib: set pip mode %d",sink->pip_mode);
+        int pip = 1;
+        if (sink->pip_mode && render_set_value(sink_priv->render_device_handle, KEY_VIDEO_PIP, &pip) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "tunnel lib: set pip error");
+            goto error;
+        }
 
         GST_DEBUG_OBJECT(sink, "set qos fail");
         gst_base_sink_set_qos_enabled((GstBaseSink *)sink, FALSE);
@@ -710,39 +729,39 @@ gst_aml_video_sink_change_state(GstElement *element,
     case GST_STATE_CHANGE_READY_TO_PAUSED:
     {
 
-        // if (render_set(sink_priv->render_device_handle, KEY_SELECT_DISPLAY_OUTPUT, &sink->display_output_index) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib first set output index error");
-        //     goto error;
-        // }
+        if (render_set_value(sink_priv->render_device_handle, KEY_SELECT_DISPLAY_OUTPUT, &sink->display_output_index) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib first set output index error");
+            goto error;
+        }
 
-        // if (render_connect(sink_priv->render_device_handle) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib connect device fail");
-        //     goto error;
-        // }
+        if (render_connect(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib connect device fail");
+            goto error;
+        }
 
-        // if (render_set(sink_priv->render_device_handle, KEY_IMMEDIATELY_OUTPUT, &sink->default_sync) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib set immediately output error");
-        //     goto error;
-        // }
+        if (render_set_value(sink_priv->render_device_handle, KEY_IMMEDIATELY_OUTPUT, &sink->default_sync) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib set immediately output error");
+            goto error;
+        }
 
-        // if (render_pause(sink_priv->render_device_handle) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib pause device fail when first into paused state");
-        //     goto error;
-        // }
+        if (render_pause(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib pause device fail when first into paused state");
+            goto error;
+        }
         break;
     }
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
     {
         sink->video_playing = TRUE;
-        // if (render_resume(sink_priv->render_device_handle) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib resume device fail");
-        //     goto error;
-        // }
+        if (render_resume(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib resume device fail");
+            goto error;
+        }
         break;
     }
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
@@ -779,11 +798,11 @@ gst_aml_video_sink_change_state(GstElement *element,
         // GstBaseSink *basesink;
         // basesink = GST_BASE_SINK(sink);
 
-        // if (render_pause(sink_priv->render_device_handle) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib pause device fail");
-        //     goto error;
-        // }
+        if (render_pause(sink_priv->render_device_handle) == -1)
+        {
+            GST_ERROR_OBJECT(sink, "render lib pause device fail");
+            goto error;
+        }
 
         // GST_BASE_SINK_PREROLL_LOCK(basesink);
         // basesink->have_preroll = 1;
@@ -799,11 +818,7 @@ gst_aml_video_sink_change_state(GstElement *element,
             sink->eos_detect_thread_handle= NULL;
         }
         GST_DEBUG_OBJECT(sink, "before disconnect rlib");
-        // if (render_disconnect(sink_priv->render_device_handle) == -1)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib disconnect device fail");
-        //     goto error;
-        // }
+        render_disconnect(sink_priv->render_device_handle);
         GST_DEBUG_OBJECT(sink, "after disconnect rlib");
         GST_DEBUG_OBJECT(sink, "buf stat | queued:%d, dequeued:%d, droped:%d, rendered:%d",
                          sink->queued, sink->dequeued, sink->droped, sink->rendered);
@@ -813,7 +828,7 @@ gst_aml_video_sink_change_state(GstElement *element,
     {
         if (sink_priv->render_device_handle)
         {
-            //render_close(sink_priv->render_device_handle);
+            render_close(sink_priv->render_device_handle);
         }
         gst_aml_video_sink_reset_private(sink);
 
@@ -823,9 +838,10 @@ gst_aml_video_sink_change_state(GstElement *element,
         break;
     }
 
-    gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
+    //gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
 
     GST_OBJECT_UNLOCK(sink);
+    GST_DEBUG_OBJECT(sink, "done");
     return ret;
 
 error:
@@ -980,8 +996,8 @@ static void gst_aml_video_sink_wait_fence (GstAmlVideoSink *sink)
 
     while ((q_num >= sink->fence_num + dq_num) && sink->video_playing)
     {
-        g_usleep(GST_AML_WAIT_TIME);
         GST_DEBUG_OBJECT(sink, "waiting render_lib release buff......");
+        g_usleep(GST_AML_WAIT_TIME);
         GST_OBJECT_LOCK(sink);
         q_num = sink->queued;
         dq_num = sink->dequeued;
@@ -995,14 +1011,13 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     GstFlowReturn ret = GST_FLOW_OK;
-    //RenderBuffer *tunnel_lib_buf_wrap = NULL;
-
-    GST_OBJECT_LOCK(vsink);
+    RenderBuffer *tunnel_lib_buf_wrap = NULL;
 
     GST_LOG_OBJECT(sink, "revice buffer:%p (start: %" GST_TIME_FORMAT ", end: %" GST_TIME_FORMAT "), from pool:%p, need_preroll:%d",
                    buffer, GST_TIME_ARGS(GST_BUFFER_PTS(buffer)), GST_TIME_ARGS(GST_BUFFER_DURATION(buffer)),
                    buffer->pool, ((GstBaseSink *)sink)->need_preroll);
 
+    GST_OBJECT_LOCK(vsink);
     sink->last_dec_buf_pts = GST_BUFFER_PTS(buffer);
     GST_DEBUG_OBJECT(sink, "set last_dec_buf_pts %" GST_TIME_FORMAT, GST_TIME_ARGS(sink->last_dec_buf_pts));
 
@@ -1029,42 +1044,42 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     if (sink_priv->is_flushing)
     {
         // gst_buffer_unref(buffer);
-        // if (render_flush(sink_priv->render_device_handle) == 0)
-        // {
-        //     GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
-        //     goto flushing;
-        // }
-        // else
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib: flush error");
-        //     goto error;
-        // }
+        if (render_flush(sink_priv->render_device_handle) == 0)
+        {
+            GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
+            goto flushing;
+        }
+        else
+        {
+            GST_ERROR_OBJECT(sink, "render lib: flush error");
+            goto error;
+        }
     }
 
     if (sink_priv->window_set.window_change)
     {
-        //RenderWindowSize window_size = {sink_priv->window_set.x, sink_priv->window_set.y, sink_priv->window_set.w, sink_priv->window_set.h};
-        // if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
-        // {
-        //     GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
-        //     return FALSE;
-        // }
-        // sink_priv->window_set.window_change = FALSE;
+        RenderRect window_size = {sink_priv->window_set.x, sink_priv->window_set.y, sink_priv->window_set.w, sink_priv->window_set.h};
+        if (render_set_value(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
+        {
+            GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
+            return FALSE;
+        }
+        sink_priv->window_set.window_change = FALSE;
 
-        // GST_DEBUG_OBJECT(sink, "tunnel lib: set window size to %d,%d,%d,%d",
-        //                  sink_priv->window_set.x,
-        //                  sink_priv->window_set.y,
-        //                  sink_priv->window_set.w,
-        //                  sink_priv->window_set.h);
+        GST_DEBUG_OBJECT(sink, "tunnel lib: set window size to %d,%d,%d,%d",
+                         sink_priv->window_set.x,
+                         sink_priv->window_set.y,
+                         sink_priv->window_set.w,
+                         sink_priv->window_set.h);
     }
 
     if (sink_priv->video_info_changed)
     {
-        // if (gst_render_set_params(vsink) == FALSE)
-        // {
-        //     GST_ERROR_OBJECT(sink, "render lib: set params fail");
-        //     goto error;
-        // }
+        if (gst_render_set_params(vsink) == FALSE)
+        {
+            GST_ERROR_OBJECT(sink, "render lib: set params fail");
+            goto error;
+        }
         sink_priv->video_info_changed = FALSE;
     }
 
@@ -1074,31 +1089,31 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         goto ret;
     }
 
-    // tunnel_lib_buf_wrap = render_allocate_render_buffer_wrap(sink_priv->render_device_handle, BUFFER_FLAG_EXTER_DMA_BUFFER, 0);
-    // if (!tunnel_lib_buf_wrap)
-    // {
-    //     GST_ERROR_OBJECT(sink, "render lib: alloc buffer wrap fail");
-    //     goto error;
-    // }
-    // if (!gst_aml_video_sink_tunnel_buf(sink, buffer, tunnel_lib_buf_wrap))
-    // {
-    //     GST_ERROR_OBJECT(sink, "construc render buffer fail");
-    //     goto error;
-    // }
+    tunnel_lib_buf_wrap = render_allocate_render_buffer_wrap(sink_priv->render_device_handle, BUFFER_FLAG_DMA_BUFFER);
+    if (!tunnel_lib_buf_wrap)
+    {
+        GST_ERROR_OBJECT(sink, "render lib: alloc buffer wrap fail");
+        goto error;
+    }
+    if (!gst_aml_video_sink_tunnel_buf(sink, buffer, tunnel_lib_buf_wrap))
+    {
+        GST_ERROR_OBJECT(sink, "construc render buffer fail");
+        goto error;
+    }
 
     GST_OBJECT_UNLOCK(vsink);
 
     //Set fence to control the speed of sending buffer
     gst_aml_video_sink_wait_fence(sink);
 
-    // if (render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == -1)
-    // {
-    //     GST_ERROR_OBJECT(sink, "render lib: display frame fail");
-    //     goto error;
-    // }
+    if (render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == -1)
+    {
+        GST_ERROR_OBJECT(sink, "render lib: display frame fail");
+        goto error;
+    }
 
     sink->queued++;
-    gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
+    //gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
     GST_DEBUG_OBJECT(sink, "GstBuffer:%p, pts: %" GST_TIME_FORMAT " queued ok, queued:%d", buffer, GST_TIME_ARGS(GST_BUFFER_PTS(buffer)), sink->queued);
     sink->quit_eos_detect_thread = FALSE;
     if (sink->eos_detect_thread_handle == NULL )
@@ -1135,10 +1150,10 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
         GST_INFO_OBJECT(sink, "flush start");
         GST_OBJECT_LOCK(sink);
         sink_priv->is_flushing = TRUE;
-        // if (render_flush(sink_priv->render_device_handle) == 0)
-        // {
-        //     GST_INFO_OBJECT(sink, "recv flush start and set render lib flushing succ");
-        // }
+        if (render_flush(sink_priv->render_device_handle) == 0)
+        {
+            GST_INFO_OBJECT(sink, "recv flush start and set render lib flushing succ");
+        }
         GST_INFO_OBJECT(sink, "flush start done");
         GST_OBJECT_UNLOCK(sink);
         break;
@@ -1150,11 +1165,6 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
                          sink->queued,
                          sink->rendered,
                          sink->droped);
-        // gst_wait_eos_signal(sink);
-        if (sink->queued > sink->rendered + sink->droped)
-        {
-            gst_wait_eos_signal(sink);
-        }
 
         GST_OBJECT_LOCK(sink);
         GST_INFO_OBJECT(sink, "flush all count num to zero");
@@ -1402,12 +1412,11 @@ static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
         g_free(sink_priv->lge_ctxt.res_info.coretype);
 #endif
     memset(sink_priv, 0, sizeof(GstAmlVideoSinkPrivate));
-    sink_priv->render_device_name = RENDER_DEVICE_NAME;
     sink_priv->use_dmabuf = USE_DMABUF;
     sink_priv->mediasync_instanceid = -1;
 }
-#if 0
-void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
+
+static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
 {
     GstAmlVideoSink *sink = (GstAmlVideoSink *)userData;
     switch (type)
@@ -1436,7 +1445,7 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
                              buffer,
                              dmabuf->planeCnt, dmabuf->fd[0], dmabuf->fd[1],
                              buffer ? GST_BUFFER_PTS(buffer) : -1, sink->queued, sink->dequeued, sink->droped, sink->rendered);
-            gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
+            //gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
         }
         else
         {
@@ -1446,17 +1455,17 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
     }
     case MSG_RELEASE_BUFFER:
     {
-        GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib");
         GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
         RenderBuffer *tunnel_lib_buf_wrap = (RenderBuffer *)msg;
         GstBuffer *buffer = (GstBuffer *)tunnel_lib_buf_wrap->priv;
+        GST_LOG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib,%p, pts:%lld ns",buffer, tunnel_lib_buf_wrap->pts);
 
         if (buffer)
         {
             GST_DEBUG_OBJECT(sink, "get message: MSG_RELEASE_BUFFER from tunnel lib, buffer:%p, from pool:%p", buffer, buffer->pool);
             gst_buffer_unref(buffer);
             sink->dequeued++;
-            gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
+            //gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
         }
         else
         {
@@ -1465,16 +1474,14 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
         render_free_render_buffer_wrap(sink_priv->render_device_handle, tunnel_lib_buf_wrap);
         break;
     }
-    case MSG_CONNECTED_FAIL:
-    {
-        GST_ERROR_OBJECT(sink, "tunnel lib: should not send message:%d", type);
-        break;
-    }
-    case MSG_DISCONNECTED_FAIL:
-    {
-        GST_ERROR_OBJECT(sink, "tunnel lib: should not send message:%d", type);
-        break;
-    }
+    case MSG_FIRST_FRAME: {
+        GST_LOG_OBJECT(sink, "signal first frame");
+        g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+    } break;
+    case MSG_UNDER_FLOW: {
+        //GST_LOG_OBJECT(sink, "signal under flow");
+        //g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+    } break;
     default:
     {
         GST_ERROR_OBJECT(sink, "tunnel lib: error message type");
@@ -1483,7 +1490,7 @@ void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
     return;
 }
 
-int gst_render_val_callback(void *userData, int key, void *value)
+static int gst_render_val_callback(void *userData, int key, void *value)
 {
     GstAmlVideoSink *vsink = (GstAmlVideoSink *)userData;
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(vsink);
@@ -1493,22 +1500,20 @@ int gst_render_val_callback(void *userData, int key, void *value)
     {
     case KEY_MEDIASYNC_INSTANCE_ID:
     {
-        // vsink->avsync_mode = 0;
-        if (render_set(sink_priv->render_device_handle, KEY_MEDIASYNC_SYNC_MODE, (void *)&vsink->avsync_mode) == -1)
-        {
-            GST_ERROR_OBJECT(vsink, "tunnel lib: set syncmode error");
-            ret = -1;
-        }
         if (gst_get_mediasync_instanceid(vsink))
         {
             int hasAudio = 1;
             *val = sink_priv->mediasync_instanceid;
             GST_DEBUG_OBJECT(vsink, "get mediasync instance id:%d", *val);
-            *val = sink_priv->mediasync_instanceid;
-            render_set(sink_priv->render_device_handle, KEY_MEDIASYNC_HAS_AUDIO, (void *)&hasAudio);
+            render_set_value(sink_priv->render_device_handle, KEY_MEDIASYNC_SYNC_MODE, (void *)&vsink->avsync_mode);
+            render_set_value(sink_priv->render_device_handle, KEY_MEDIASYNC_HAS_AUDIO, (void *)&hasAudio);
         }
         else
         {
+            int hasAudio = 0;
+            vsink->avsync_mode = 0;// 0:v master, 1:a master
+            render_set_value(sink_priv->render_device_handle, KEY_MEDIASYNC_SYNC_MODE, (void *)&vsink->avsync_mode);
+            render_set_value(sink_priv->render_device_handle, KEY_MEDIASYNC_HAS_AUDIO, (void *)&hasAudio);
             GST_ERROR_OBJECT(vsink, "can't get mediasync instance id, use vmaster");
             ret = -1;
         }
@@ -1567,13 +1572,13 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         GST_ERROR_OBJECT(vsink, "too many memorys in gst buffer");
         goto error;
     }
-    GST_DEBUG_OBJECT(vsink, "dbg3-0, dmabuf:%p", dmabuf);
+    //GST_DEBUG_OBJECT(vsink, "dbg3-0, dmabuf:%p", dmabuf);
 
     dmabuf->planeCnt = n_mem;
     dmabuf->width = vmeta->width;
     dmabuf->height = vmeta->height;
 
-    GST_DEBUG_OBJECT(vsink, "dbgjxs, vmeta->width:%d, dmabuf->width:%d", vmeta->width, dmabuf->width);
+    //GST_DEBUG_OBJECT(vsink, "dbgjxs, vmeta->width:%d, dmabuf->width:%d", vmeta->width, dmabuf->width);
 
     for (guint i = 0; i < n_mem; i++)
     {
@@ -1601,7 +1606,7 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
         if (gst_buffer_find_memory(gst_buf, vmeta->offset[i], 1, &mem_idx, &length, &skip) && mem_idx == i)
         {
             dmabuf->offset[i] = dma_mem->offset + skip;
-            GST_DEBUG_OBJECT(vsink, "get skip from buffer:%d, offset[%d]:%d", skip, i, dmabuf->offset[i]);
+            //GST_DEBUG_OBJECT(vsink, "get skip from buffer:%d, offset[%d]:%d", skip, i, dmabuf->offset[i]);
         }
         else
         {
@@ -1610,25 +1615,25 @@ static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer 
             goto error;
         }
 
-        GST_DEBUG_OBJECT(vsink, "dma buffer layer:%d, handle:%d, fd:%d, size:%d, offset:%d, stride:%d",
+        GST_LOG_OBJECT(vsink, "dma buffer layer:%d, handle:%d, fd:%d, size:%d, offset:%d, stride:%d",
                          i, dmabuf->handle[i], dmabuf->fd[i], dmabuf->size[i], dmabuf->offset[i], dmabuf->stride[i]);
     }
-    tunnel_lib_buf_wrap->flag = BUFFER_FLAG_EXTER_DMA_BUFFER;
+    tunnel_lib_buf_wrap->flag = BUFFER_FLAG_DMA_BUFFER;
     tunnel_lib_buf_wrap->pts = GST_BUFFER_PTS(gst_buf);
     tunnel_lib_buf_wrap->priv = (void *)gst_buf;
-    GST_DEBUG_OBJECT(vsink, "set tunnel lib buf priv:%p from pool:%p, pts:%lld", tunnel_lib_buf_wrap->priv, gst_buf->pool, tunnel_lib_buf_wrap->pts);
-    GST_DEBUG_OBJECT(vsink, "dbg: buf in:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d",
-                     tunnel_lib_buf_wrap->priv,
-                     dmabuf->planeCnt,
-                     dmabuf->fd[0],
-                     dmabuf->fd[1]);
+    GST_LOG_OBJECT(vsink, "set tunnel lib buf priv:%p from pool:%p, pts:%lld", tunnel_lib_buf_wrap->priv, gst_buf->pool, tunnel_lib_buf_wrap->pts);
+    // GST_LOG_OBJECT(vsink, "dbg: buf in:%p, planeCnt:%d, plane[0].fd:%d, plane[1].fd:%d",
+    //                  tunnel_lib_buf_wrap->priv,
+    //                  dmabuf->planeCnt,
+    //                  dmabuf->fd[0],
+    //                  dmabuf->fd[1]);
 
     return ret;
 
 error:
     return ret;
 }
-#endif
+
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink)
 {
     GST_DEBUG_OBJECT(vsink, "trace in");
@@ -1712,7 +1717,7 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
         {
             gst_object_unref(elementPrev);
         }
-        // TODO use this func will ref elmentï¼Œbut when unref these elementï¼Ÿ
+        // TODO use this func will ref elment£¬but when unref these element£¿
         element = GST_ELEMENT_CAST(gst_element_get_parent(element));
         if (element)
         {
@@ -1791,28 +1796,24 @@ static gboolean gst_render_set_params(GstVideoSink *vsink)
     int tunnelmode = 0; // 1 for tunnel mode; 0 for non-tunnel mode
 
     // RenderWindowSize window_size = {0, 0, video_info->width, video_info->height};
-    //RenderFrameSize frame_size = {video_info->width, video_info->height};
+    RenderFrameSize frame_size = {video_info->width, video_info->height};
     GstVideoFormat format = video_info->finfo ? video_info->finfo->format : GST_VIDEO_FORMAT_UNKNOWN;
-    // if (render_set(sink_priv->render_device_handle, KEY_WINDOW_SIZE, &window_size) == -1)
-    // {
-    //     GST_ERROR_OBJECT(vsink, "tunnel lib: set window size error");
-    //     return FALSE;
-    // }
-    // if (render_set(sink_priv->render_device_handle, KEY_MEDIASYNC_TUNNEL_MODE, (void *)&tunnelmode) == -1)
-    // {
-    //     GST_ERROR_OBJECT(vsink, "tunnel lib: set tunnelmode error");
-    //     return FALSE;
-    // }
-    // if (render_set(sink_priv->render_device_handle, KEY_FRAME_SIZE, &frame_size) == -1)
-    // {
-    //     GST_ERROR_OBJECT(vsink, "tunnel lib: set frame size error");
-    //     return FALSE;
-    // }
-    // if (render_set(sink_priv->render_device_handle, KEY_VIDEO_FORMAT, &format) == -1)
-    // {
-    //     GST_ERROR_OBJECT(vsink, "tunnel lib: set video format error");
-    //     return FALSE;
-    // }
+
+    if (render_set_value(sink_priv->render_device_handle, KEY_MEDIASYNC_TUNNEL_MODE, (void *)&tunnelmode) == -1)
+    {
+        GST_ERROR_OBJECT(vsink, "tunnel lib: set tunnelmode error");
+        return FALSE;
+    }
+    if (render_set_value(sink_priv->render_device_handle, KEY_FRAME_SIZE, &frame_size) == -1)
+    {
+        GST_ERROR_OBJECT(vsink, "tunnel lib: set frame size error");
+        return FALSE;
+    }
+    if (render_set_value(sink_priv->render_device_handle, KEY_VIDEO_FORMAT, &format) == -1)
+    {
+        GST_ERROR_OBJECT(vsink, "tunnel lib: set video format error");
+        return FALSE;
+    }
 
     return TRUE;
 }

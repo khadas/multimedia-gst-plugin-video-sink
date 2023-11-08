@@ -132,7 +132,6 @@ enum
 #define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE 1
 #define DRMBP_UNLIMIT_MAX_BUFSIZE 0
 #define GST_AML_WAIT_TIME  5000
-#define GST_AML_DEFAULT_FENCE_NUM 99 // disable fence_num if set 99;
 
 typedef struct _GstAmlVideoSinkWindowSet
 {
@@ -226,7 +225,6 @@ static void gst_render_msg_callback(void *userData, RenderMsgType type, void *ms
 static int gst_render_val_callback(void *userData, int key, void *value);
 static gboolean gst_aml_video_sink_tunnel_buf(GstAmlVideoSink *vsink, GstBuffer *gst_buf, RenderBuffer *tunnel_lib_buf_wrap);
 static gboolean gst_get_mediasync_instanceid(GstAmlVideoSink *vsink);
-static void gst_aml_video_sink_wait_fence (GstAmlVideoSink *sink);
 #if GST_USE_PLAYBIN
 static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink);
 #endif
@@ -409,7 +407,6 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->secure_mode = FALSE;
     sink->eos_detect_thread_handle = NULL;
     sink->quit_eos_detect_thread = FALSE;
-    sink->fence_num = GST_AML_DEFAULT_FENCE_NUM;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -983,29 +980,6 @@ done:
     return ret;
 }
 
-static void gst_aml_video_sink_wait_fence (GstAmlVideoSink *sink)
-{
-    guint q_num = 0;
-    guint dq_num = 0;
-
-    GST_OBJECT_LOCK(sink);
-    q_num = sink->queued;
-    dq_num = sink->dequeued;
-    GST_OBJECT_UNLOCK(sink);
-    GST_DEBUG_OBJECT(sink, "q_num %d , dq_num %d ,sink->fence_num %d",q_num , dq_num,sink->fence_num);
-
-    while ((q_num >= sink->fence_num + dq_num) && sink->video_playing)
-    {
-        GST_DEBUG_OBJECT(sink, "waiting render_lib release buff......");
-        g_usleep(GST_AML_WAIT_TIME);
-        GST_OBJECT_LOCK(sink);
-        q_num = sink->queued;
-        dq_num = sink->dequeued;
-        GST_OBJECT_UNLOCK(sink);
-    }
-    return;
-}
-
 static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffer *buffer)
 {
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
@@ -1103,9 +1077,6 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
 
     GST_OBJECT_UNLOCK(vsink);
 
-    //Set fence to control the speed of sending buffer
-    gst_aml_video_sink_wait_fence(sink);
-
     if (render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == -1)
     {
         GST_ERROR_OBJECT(sink, "render lib: display frame fail");
@@ -1199,19 +1170,6 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
             GST_OBJECT_UNLOCK(sink);
         }
 
-        if (gst_event_has_name(event, "video_fence"))
-        {
-            guint fence_num;
-            GST_OBJECT_LOCK(sink);
-            GST_DEBUG_OBJECT(sink, "Got video_fence Event");
-            const GstStructure *s = gst_event_get_structure(event);
-            if (s)
-            {
-                gst_structure_get_uint(s,"fence_num",&fence_num);
-                sink->fence_num = fence_num;
-            }
-            GST_OBJECT_UNLOCK(sink);
-        }
         gst_event_unref(event);
         return result;
     }
@@ -1717,7 +1675,7 @@ static GstElement *gst_aml_video_sink_find_audio_sink(GstAmlVideoSink *sink)
         {
             gst_object_unref(elementPrev);
         }
-        // TODO use this func will ref elment£¬but when unref these element£¿
+        // TODO use this func will ref element,unref when done
         element = GST_ELEMENT_CAST(gst_element_get_parent(element));
         if (element)
         {

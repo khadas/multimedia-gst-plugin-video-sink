@@ -1437,8 +1437,11 @@ static void gst_render_msg_callback(void *userData, RenderMsgType type, void *ms
         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
     } break;
     case MSG_UNDER_FLOW: {
-        //GST_LOG_OBJECT(sink, "signal under flow");
-        //g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+        GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
+        if (!sink_priv->got_eos) {
+            GST_LOG_OBJECT(sink, "signal under flow");
+            g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+        }
     } break;
     default:
     {

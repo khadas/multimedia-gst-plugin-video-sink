@@ -1011,23 +1011,6 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     {
         GST_LOG_OBJECT(sink, "get preroll buffer 1st time, buf:%p", buffer);
         sink_priv->preroll_buffer = buffer;
-        // goto flushing;
-    }
-
-    // TODO should call tunnel lib flush func
-    if (sink_priv->is_flushing)
-    {
-        // gst_buffer_unref(buffer);
-        if (render_flush(sink_priv->render_device_handle) == 0)
-        {
-            GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
-            goto flushing;
-        }
-        else
-        {
-            GST_ERROR_OBJECT(sink, "render lib: flush error");
-            goto error;
-        }
     }
 
     if (sink_priv->window_set.window_change)
@@ -1069,21 +1052,35 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         GST_ERROR_OBJECT(sink, "render lib: alloc buffer wrap fail");
         goto error;
     }
+
     if (!gst_aml_video_sink_tunnel_buf(sink, buffer, tunnel_lib_buf_wrap))
     {
         GST_ERROR_OBJECT(sink, "construc render buffer fail");
         goto error;
     }
-
     GST_OBJECT_UNLOCK(vsink);
-
     if (render_display_frame(sink_priv->render_device_handle, tunnel_lib_buf_wrap) == -1)
     {
         GST_ERROR_OBJECT(sink, "render lib: display frame fail");
-        goto error;
+        return GST_FLOW_CUSTOM_ERROR_2;
     }
 
+    GST_OBJECT_LOCK(vsink);
     sink->queued++;
+    if (sink_priv->is_flushing)
+    {
+        if (render_flush(sink_priv->render_device_handle) == 0)
+        {
+            GST_DEBUG_OBJECT(sink, "in flushing flow, release the buffer directly");
+            goto flushing;
+        }
+        else
+        {
+            GST_ERROR_OBJECT(sink, "render lib: flush error");
+            goto error;
+        }
+    }
+
     //gst_aml_video_sink_dump_stat(sink, GST_DUMP_STAT_FILENAME);
     GST_DEBUG_OBJECT(sink, "GstBuffer:%p, pts: %" GST_TIME_FORMAT " queued ok, queued:%d", buffer, GST_TIME_ARGS(GST_BUFFER_PTS(buffer)), sink->queued);
     sink->quit_eos_detect_thread = FALSE;
@@ -1092,7 +1089,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         GST_DEBUG_OBJECT(sink, "start eos detect thread");
         sink->eos_detect_thread_handle = g_thread_new("video_sink_eos", eos_detection_thread, sink);
     }
-    return ret;
+    goto ret;
 
 error:
     GST_DEBUG_OBJECT(sink, "GstBuffer:%p queued error", buffer);
@@ -1100,6 +1097,7 @@ error:
     goto ret;
 flushing:
     GST_DEBUG_OBJECT(sink, "flushing when buf:%p", buffer);
+    ret = GST_FLOW_FLUSHING;
     goto ret;
 ret:
     GST_OBJECT_UNLOCK(vsink);

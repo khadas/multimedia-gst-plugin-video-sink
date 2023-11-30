@@ -104,6 +104,7 @@ enum
     PROP_WINDOW_SET,
     PROP_RES_USAGE,
     PROP_DISPLAY_OUTPUT,
+    PROP_SHOW_FIRST_FRAME_ASAP,
 #if GST_IMPORT_LGE_PROP
     PROP_LGE_RESOURCE_INFO,
     PROP_LGE_CURRENT_PTS,
@@ -180,6 +181,7 @@ struct _GstAmlVideoSinkPrivate
     /* property params */
     gboolean fullscreen;
     gboolean mute;
+    gboolean show_first_frame_asap;
 
 #if GST_IMPORT_LGE_PROP
     GstAmlVideoSinkLgeCtxt lge_ctxt;
@@ -316,6 +318,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
         g_param_spec_int("display-output", "display output index",
                          "display output index, 0 is primary output and default value; 1 is extend display output",
                          G_MININT, G_MAXINT, 0, G_PARAM_READWRITE));
+
+    g_object_class_install_property(
+        G_OBJECT_CLASS(klass), PROP_SHOW_FIRST_FRAME_ASAP,
+        g_param_spec_boolean("show-first-frame-asap", "show first video frame asap",
+                             "Whether showing first video frame asap, default is disable",
+                             FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
@@ -589,6 +597,12 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         GST_OBJECT_UNLOCK(sink);
         break;
     }
+    case PROP_SHOW_FIRST_FRAME_ASAP:
+    {
+        sink_priv->show_first_frame_asap = g_value_get_boolean(value);
+        GST_DEBUG_OBJECT(sink, "set show first frame asap %d",sink_priv->show_first_frame_asap);
+        break;
+    }
 #if GST_IMPORT_LGE_PROP
     case PROP_LGE_RESOURCE_INFO:
     {
@@ -701,6 +715,9 @@ gst_aml_video_sink_change_state(GstElement *element,
     {
     case GST_STATE_CHANGE_NULL_TO_READY:
     {
+        if (!sink_priv->show_first_frame_asap) {
+            setenv("vendor_mediasync_show_firstframe_nosync", "0", 0);
+        }
         sink_priv->render_device_handle = render_open();
         if (sink_priv->render_device_handle == NULL)
         {
@@ -716,6 +733,11 @@ gst_aml_video_sink_change_state(GstElement *element,
         {
             GST_ERROR_OBJECT(sink, "tunnel lib: set pip error");
             goto error;
+        }
+        //check if showing first frame no sync
+        if (sink_priv->show_first_frame_asap) {
+            int show_frame_asap = 1;
+            render_set_value(sink_priv->render_device_handle, KEY_SHOW_FRIST_FRAME_NOSYNC, &show_frame_asap);
         }
 
         GST_DEBUG_OBJECT(sink, "set qos fail");
@@ -1370,6 +1392,7 @@ static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
     memset(sink_priv, 0, sizeof(GstAmlVideoSinkPrivate));
     sink_priv->use_dmabuf = USE_DMABUF;
     sink_priv->mediasync_instanceid = -1;
+    sink_priv->show_first_frame_asap = FALSE;
 }
 
 static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)

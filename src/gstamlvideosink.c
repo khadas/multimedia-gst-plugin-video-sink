@@ -182,6 +182,7 @@ struct _GstAmlVideoSinkPrivate
     gboolean fullscreen;
     gboolean mute;
     gboolean show_first_frame_asap;
+    gboolean emitUnderflowSignal;
 
 #if GST_IMPORT_LGE_PROP
     GstAmlVideoSinkLgeCtxt lge_ctxt;
@@ -402,7 +403,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     GstBaseSink *basesink = (GstBaseSink *)sink;
 
     sink->last_displayed_buf_pts = 0;
-    sink->last_dec_buf_pts = 0;
+    sink->last_dec_buf_pts = GST_CLOCK_TIME_NONE;
     /* init eos detect */
     sink->queued = 0;
     sink->dequeued = 0;
@@ -415,6 +416,10 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->secure_mode = FALSE;
     sink->eos_detect_thread_handle = NULL;
     sink->quit_eos_detect_thread = FALSE;
+    sink->frame_rate_num = 0;
+    sink->frame_rate_denom = 0;
+    sink->frame_rate_changed = FALSE;
+    sink->frame_rate = 0.0;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -1062,6 +1067,14 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         sink_priv->video_info_changed = FALSE;
     }
 
+    if (sink->frame_rate_changed) {
+        sink->frame_rate_changed = FALSE;
+        RenderFraction frame_rate_fraction;
+        frame_rate_fraction.num = sink->frame_rate_num;
+        frame_rate_fraction.denom = sink->frame_rate_denom;
+        render_set_value(sink_priv->render_device_handle, KEY_VIDEO_FRAME_RATE, &sink->default_sync);
+    }
+
     if (!gst_aml_video_sink_check_buf(sink, buffer))
     {
         GST_ERROR_OBJECT(sink, "buf out of segment return");
@@ -1223,12 +1236,18 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
             gint num, denom;
             if (gst_structure_get_fraction( structure, "framerate", &num, &denom ))
             {
+                GST_DEBUG_OBJECT(sink, "framerate num:%d,denom:%d",num,denom);
                 if ( denom == 0 ) denom= 1;
                 sink->frame_rate= (double)num/(double)denom;
                 if ( sink->frame_rate <= 0.0 )
                 {
                     GST_DEBUG_OBJECT(sink, "caps have framerate of 0 - assume 60");
                     sink->frame_rate= 60.0;
+                }
+                if (sink->frame_rate_num != num || sink->frame_rate_denom != denom) {
+                    sink->frame_rate_num = num;
+                    sink->frame_rate_denom = denom;
+                    sink->frame_rate_changed = TRUE;
                 }
             }
         }
@@ -1241,6 +1260,7 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
 
     GST_DEBUG_OBJECT(sink, "pass to basesink");
     result = GST_BASE_SINK_CLASS(parent_class)->event((GstBaseSink *)sink, event);
+    GST_DEBUG_OBJECT(sink, "done");
     return result;
 }
 
@@ -1393,6 +1413,7 @@ static void gst_aml_video_sink_reset_private(GstAmlVideoSink *sink)
     sink_priv->use_dmabuf = USE_DMABUF;
     sink_priv->mediasync_instanceid = -1;
     sink_priv->show_first_frame_asap = FALSE;
+    sink_priv->emitUnderflowSignal = FALSE;
 }
 
 static void gst_render_msg_callback(void *userData, RenderMsgType type, void *msg)
@@ -1459,9 +1480,9 @@ static void gst_render_msg_callback(void *userData, RenderMsgType type, void *ms
     } break;
     case MSG_UNDER_FLOW: {
         GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
-        if (!sink_priv->got_eos) {
+        if (sink->video_playing && !sink_priv->got_eos) {
             GST_LOG_OBJECT(sink, "signal under flow");
-            g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+            sink_priv->emitUnderflowSignal = TRUE;
         }
     } break;
     default:
@@ -1805,12 +1826,17 @@ static gpointer eos_detection_thread(gpointer data)
     GstAmlVideoSink *sink = (GstAmlVideoSink *)data;
     GstAmlVideoSinkPrivate *sink_priv = GST_AML_VIDEO_SINK_GET_PRIVATE(sink);
     int eosCountDown;
+    double frameRate = (sink->frame_rate > 0.0 ? sink->frame_rate : 30.0);
     GST_DEBUG("eos_detection_thread: enter");
 
     eosCountDown = 2;
     while (!sink->quit_eos_detect_thread )
     {
-        usleep(1000000/sink->frame_rate);
+        usleep(1000000/frameRate);
+        if (sink->video_playing && sink_priv->emitUnderflowSignal) {
+            sink_priv->emitUnderflowSignal = FALSE;
+            g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+        }
         if (sink->video_playing && sink_priv->got_eos)
         {
             if (sink->queued == sink->rendered + sink->droped)

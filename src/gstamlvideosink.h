@@ -64,6 +64,9 @@ struct _GstAmlVideoSink
   GCond eos_cond;
   gboolean quit_eos_detect_thread;
   GThread *eos_detect_thread_handle;
+  gint frame_rate_num;
+  gint frame_rate_denom;
+  gboolean frame_rate_changed;
   double frame_rate;
   gboolean video_playing;
 

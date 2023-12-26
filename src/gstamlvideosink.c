@@ -420,6 +420,8 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->frame_rate_denom = 0;
     sink->frame_rate_changed = FALSE;
     sink->frame_rate = 0.0;
+    sink->pixel_aspect_ratio_changed = FALSE;
+    sink->pixel_aspect_ratio = 1.0;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -1075,6 +1077,12 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         render_set_value(sink_priv->render_device_handle, KEY_VIDEO_FRAME_RATE, &sink->default_sync);
     }
 
+    if (sink->pixel_aspect_ratio_changed)
+    {
+        sink->pixel_aspect_ratio_changed = FALSE;
+        render_set_value(sink_priv->render_device_handle, KEY_PIXEL_ASPECT_RATIO, &sink->pixel_aspect_ratio);
+    }
+
     if (!gst_aml_video_sink_check_buf(sink, buffer))
     {
         GST_ERROR_OBJECT(sink, "buf out of segment return");
@@ -1248,6 +1256,16 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
                     sink->frame_rate_num = num;
                     sink->frame_rate_denom = denom;
                     sink->frame_rate_changed = TRUE;
+                }
+
+                if ( gst_structure_get_fraction( structure, "pixel-aspect-ratio", &num, &denom ) )
+                {
+                    if ( (num <= 0) || (denom <= 0))
+                    {
+                        num = denom = 1;
+                    }
+                    sink->pixel_aspect_ratio = (double)num/(double)denom;
+                    sink->pixel_aspect_ratio_changed = TRUE;
                 }
             }
         }

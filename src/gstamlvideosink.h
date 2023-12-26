@@ -71,6 +71,8 @@ struct _GstAmlVideoSink
   gboolean video_playing;
 
   gboolean secure_mode;
+  gboolean pixel_aspect_ratio_changed;
+  double pixel_aspect_ratio;
 
   GstAmlVideoSinkPrivate *priv;
 };

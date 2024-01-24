@@ -1074,7 +1074,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         RenderFraction frame_rate_fraction;
         frame_rate_fraction.num = sink->frame_rate_num;
         frame_rate_fraction.denom = sink->frame_rate_denom;
-        render_set_value(sink_priv->render_device_handle, KEY_VIDEO_FRAME_RATE, &sink->default_sync);
+        render_set_value(sink_priv->render_device_handle, KEY_VIDEO_FRAME_RATE, &frame_rate_fraction);
     }
 
     if (sink->pixel_aspect_ratio_changed)

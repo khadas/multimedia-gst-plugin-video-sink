@@ -105,6 +105,7 @@ enum
     PROP_RES_USAGE,
     PROP_DISPLAY_OUTPUT,
     PROP_SHOW_FIRST_FRAME_ASAP,
+    PROP_KEEP_LAST_FRAME_ON_FLUSH,
 #if GST_IMPORT_LGE_PROP
     PROP_LGE_RESOURCE_INFO,
     PROP_LGE_CURRENT_PTS,
@@ -290,6 +291,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                              "Whether set screen mute ",
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+    g_object_class_install_property (
+        gobject_class, PROP_KEEP_LAST_FRAME_ON_FLUSH,
+        g_param_spec_boolean ("keep-last-frame-on-flush",
+                              "set keep last frame on flush or not,default is keep last frame",
+                              "0: clean; 1: keep", TRUE, G_PARAM_READWRITE));
+
     g_object_class_install_property(
         G_OBJECT_CLASS(klass), PROP_AVSYNC_MODE,
         g_param_spec_int("avsync-mode", "avsync mode",
@@ -422,6 +429,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->frame_rate = 0.0;
     sink->pixel_aspect_ratio_changed = FALSE;
     sink->pixel_aspect_ratio = 1.0;
+    sink->keep_last_frame_on_flush = TRUE;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -472,6 +480,13 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
     {
         GST_OBJECT_LOCK(sink);
         g_value_set_int(value, sink->display_output_index);
+        GST_OBJECT_UNLOCK(sink);
+        break;
+    }
+    case PROP_KEEP_LAST_FRAME_ON_FLUSH:
+    {
+        GST_OBJECT_LOCK(sink);
+        g_value_set_boolean(value, sink->keep_last_frame_on_flush);
         GST_OBJECT_UNLOCK(sink);
         break;
     }
@@ -608,6 +623,14 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
     {
         sink_priv->show_first_frame_asap = g_value_get_boolean(value);
         GST_DEBUG_OBJECT(sink, "set show first frame asap %d",sink_priv->show_first_frame_asap);
+        break;
+    }
+    case PROP_KEEP_LAST_FRAME_ON_FLUSH:
+    {
+        GST_OBJECT_LOCK(sink);
+        sink->keep_last_frame_on_flush = g_value_get_boolean(value);
+        GST_DEBUG_OBJECT(sink, "keep last frame on flush %d", sink->keep_last_frame_on_flush);
+        GST_OBJECT_UNLOCK(sink);
         break;
     }
 #if GST_IMPORT_LGE_PROP
@@ -1162,6 +1185,8 @@ static gboolean gst_aml_video_sink_pad_event (GstBaseSink *basesink, GstEvent *e
         GST_INFO_OBJECT(sink, "flush start");
         GST_OBJECT_LOCK(sink);
         sink_priv->is_flushing = TRUE;
+        render_set_value(sink_priv->render_device_handle, KEY_KEEP_LAST_FRAME_ON_FLUSH, &sink->keep_last_frame_on_flush);
+
         if (render_flush(sink_priv->render_device_handle) == 0)
         {
             GST_INFO_OBJECT(sink, "recv flush start and set render lib flushing succ");

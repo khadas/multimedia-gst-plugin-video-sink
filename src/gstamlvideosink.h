@@ -73,6 +73,7 @@ struct _GstAmlVideoSink
   gboolean secure_mode;
   gboolean pixel_aspect_ratio_changed;
   double pixel_aspect_ratio;
+  gboolean keep_last_frame_on_flush;
 
   GstAmlVideoSinkPrivate *priv;
 };

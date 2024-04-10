@@ -745,6 +745,8 @@ gst_aml_video_sink_change_state(GstElement *element,
     {
     case GST_STATE_CHANGE_NULL_TO_READY:
     {
+        //set env to enable essos
+        setenv("ENABLE_WST_ESSOS","1",1);
         if (!sink_priv->show_first_frame_asap) {
             setenv("vendor_mediasync_show_firstframe_nosync", "0", 0);
         }
@@ -880,6 +882,8 @@ gst_aml_video_sink_change_state(GstElement *element,
             render_close(sink_priv->render_device_handle);
         }
         gst_aml_video_sink_reset_private(sink);
+        //set env to invalid essos
+        setenv("ENABLE_WST_ESSOS","0",1);
 
         break;
     }

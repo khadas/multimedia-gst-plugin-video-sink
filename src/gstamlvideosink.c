@@ -89,6 +89,7 @@ enum
 {
     SIGNAL_FIRSTFRAME,
     SIGNAL_UNDERFLOW,
+    SIGNAL_DECODEDBUFFER,
     LAST_SIGNAL
 };
 
@@ -106,6 +107,7 @@ enum
     PROP_DISPLAY_OUTPUT,
     PROP_SHOW_FIRST_FRAME_ASAP,
     PROP_KEEP_LAST_FRAME_ON_FLUSH,
+    PROP_ENABLE_USER_RENDERING,
 #if GST_IMPORT_LGE_PROP
     PROP_LGE_RESOURCE_INFO,
     PROP_LGE_CURRENT_PTS,
@@ -133,7 +135,8 @@ enum
 #define DRMBP_EXTRA_BUF_SZIE_FOR_DISPLAY 1
 #define DRMBP_LIMIT_MAX_BUFSIZE_TO_BUFSIZE 1
 #define DRMBP_UNLIMIT_MAX_BUFSIZE 0
-#define GST_AML_WAIT_TIME  5000
+#define GST_AML_WAIT_TIME 5000
+#define FORMAT_NV21 0x3231564e // this value is used to be same as cobalt
 
 typedef struct _GstAmlVideoSinkWindowSet
 {
@@ -189,6 +192,12 @@ struct _GstAmlVideoSinkPrivate
     GstAmlVideoSinkLgeCtxt lge_ctxt;
 #endif
 };
+
+typedef struct bufferInfo
+{
+   GstAmlVideoSink *sink;
+   GstBuffer *buf;
+} bufferInfo;
 
 static guint g_signals[LAST_SIGNAL]= {0};
 
@@ -332,6 +341,12 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
         g_param_spec_boolean("show-first-frame-asap", "show first video frame asap",
                              "Whether showing first video frame asap, default is disable",
                              FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+    g_object_class_install_property (
+        G_OBJECT_CLASS(klass), PROP_ENABLE_USER_RENDERING,
+        g_param_spec_boolean ("enable-user-rendering",
+                             "enable signal decoded buffer to user to rendering",
+                             "0: disable; 1: enable",
+                             FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
@@ -356,6 +371,16 @@ static void gst_aml_video_sink_class_init(GstAmlVideoSinkClass *klass)
                                               2,
                                               G_TYPE_UINT,
                                               G_TYPE_POINTER );
+    g_signals[SIGNAL_DECODEDBUFFER]= g_signal_new ("decoded-buffer-callback",
+                                              G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                              (GSignalFlags) (G_SIGNAL_RUN_FIRST),
+                                              0,    /* class offset */
+                                              NULL, /* accumulator */
+                                              NULL, /* accu data */
+                                              NULL,
+                                              G_TYPE_NONE,
+                                              1,
+                                              GST_TYPE_BUFFER);
 #if GST_IMPORT_LGE_PROP
     g_object_class_install_property(
         G_OBJECT_CLASS(klass), PROP_LGE_RESOURCE_INFO,
@@ -430,6 +455,7 @@ static void gst_aml_video_sink_init(GstAmlVideoSink *sink)
     sink->pixel_aspect_ratio_changed = FALSE;
     sink->pixel_aspect_ratio = 1.0;
     sink->keep_last_frame_on_flush = TRUE;
+    //sink->enable_decoded_buffer_signal = FALSE;
     g_mutex_init(&sink->eos_lock);
     g_cond_init(&sink->eos_cond);
 
@@ -490,6 +516,14 @@ static void gst_aml_video_sink_get_property(GObject *object, guint prop_id,
         GST_OBJECT_UNLOCK(sink);
         break;
     }
+    case PROP_ENABLE_USER_RENDERING:
+    {
+        GST_OBJECT_LOCK(sink);
+        g_value_set_boolean(value, sink->enable_decoded_buffer_signal);
+        GST_OBJECT_UNLOCK(sink);
+        break;
+    }
+
 #if GST_IMPORT_LGE_PROP
     case PROP_LGE_CURRENT_PTS:
     {
@@ -632,6 +666,11 @@ static void gst_aml_video_sink_set_property(GObject *object, guint prop_id,
         GST_DEBUG_OBJECT(sink, "keep last frame on flush %d", sink->keep_last_frame_on_flush);
         GST_OBJECT_UNLOCK(sink);
         break;
+    }
+    case PROP_ENABLE_USER_RENDERING:
+    {
+        sink->enable_decoded_buffer_signal = g_value_get_boolean(value);
+        GST_DEBUG("set enable decoded buffer signal %d", sink->enable_decoded_buffer_signal);
     }
 #if GST_IMPORT_LGE_PROP
     case PROP_LGE_RESOURCE_INFO:
@@ -864,9 +903,9 @@ gst_aml_video_sink_change_state(GstElement *element,
     {
         if ( sink->eos_detect_thread_handle )
         {
-            sink->quit_eos_detect_thread= TRUE;
+            sink->quit_eos_detect_thread = TRUE;
             g_thread_join(sink->eos_detect_thread_handle);
-            sink->eos_detect_thread_handle= NULL;
+            sink->eos_detect_thread_handle = NULL;
         }
         GST_DEBUG_OBJECT(sink, "before disconnect rlib");
         render_disconnect(sink_priv->render_device_handle);
@@ -1036,6 +1075,117 @@ done:
     return ret;
 }
 
+
+static void gst_show_vr_cb(gpointer data)
+{
+    bufferInfo *binfo = (bufferInfo*)data;
+    GstAmlVideoSink *sink = binfo->sink;
+    GST_DEBUG("unref vr360 buffer %p ",binfo->buf);
+    sink->rendered++;
+    if (binfo->buf)
+        gst_buffer_unref(binfo->buf);
+    free(binfo);
+}
+
+static gboolean gst_aml_video_sink_show_vr_frame(GstAmlVideoSink *sink, GstBuffer *buffer)
+{
+    bufferInfo *binfo;
+    GstStructure *s;
+    GstBuffer *buf;
+    gint fd0 = -1, fd1 = -1, fd2 = -1;
+    gint stride0, stride1, stride2;
+    GstVideoMeta *vmeta = NULL;
+    GST_DEBUG("pts: %lld   %p", GST_BUFFER_PTS (buffer),buffer);
+
+    binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
+    if (binfo)
+    {
+        int offset1= 0, offset2 = 0;
+        guint n_mem = 0;
+        GstMemory *dma_mem0 = NULL;
+        GstMemory *dma_mem1 = NULL;
+        GstMemory *dma_mem2 = NULL;
+        gst_buffer_ref(buffer);
+        binfo->sink= sink;
+        binfo->buf = buffer;
+        n_mem = gst_buffer_n_memory(buffer);
+        vmeta = gst_buffer_get_video_meta(buffer);
+        if (vmeta == NULL)
+        {
+            GST_ERROR_OBJECT(sink, "not found video meta info");
+            gst_buffer_unref(binfo->buf);
+            free(binfo);
+            return FALSE;
+        }
+        GST_DEBUG("height:%d,width:%d,n_mem:%d",vmeta->height,vmeta->width,n_mem);
+
+        if (n_mem > 1)
+        {
+            dma_mem0 = gst_buffer_peek_memory(buffer, 0);
+            dma_mem1 = gst_buffer_peek_memory(buffer, 1);
+            fd0 = gst_dmabuf_memory_get_fd(dma_mem0);
+            fd1 = gst_dmabuf_memory_get_fd(dma_mem1);
+            GST_DEBUG("fd0:%d,fd1:%d,fd2:%d",fd0,fd1,fd2);
+            stride0 = vmeta->stride[0];
+            stride1 = vmeta->stride[1];
+            stride2 = 0;
+            if ( fd1 < 0 )
+            {
+                stride1= stride0;
+                offset1= stride0*vmeta->height;
+            }
+            if ( fd2 < 0 )
+            {
+                offset2= offset1+(vmeta->width*vmeta->height)/2;
+                stride2= stride0;
+            }
+            GST_DEBUG("stride0:%d,stride1:%d,stride2:%d",stride0,stride1,stride2);
+            GST_DEBUG("offset0:%d,offset1:%d,offset2:%d",offset2,offset2,offset2);
+
+        }
+        else
+        {
+            GST_DEBUG("single plane");
+            dma_mem0 = gst_buffer_peek_memory(buffer, 0);
+            fd0 = gst_dmabuf_memory_get_fd(dma_mem0);
+            stride0 = vmeta->stride[0];
+            offset1= stride0*vmeta->height;
+        }
+    }
+    s = gst_structure_new ("drmbuffer_info",
+          "fd0", G_TYPE_INT, fd0,
+          "fd1", G_TYPE_INT, fd1,
+          "fd2", G_TYPE_INT, fd2,
+          "stride0", G_TYPE_INT, stride0,
+          "stride1", G_TYPE_INT, stride1,
+          "stride2", G_TYPE_INT, stride2,
+          "width", G_TYPE_INT, vmeta->width,
+          "height", G_TYPE_INT, vmeta->height,
+          "format", G_TYPE_INT, FORMAT_NV21,
+          NULL);
+    GST_DEBUG("structure: %" GST_PTR_FORMAT,s);
+
+    buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+        (gpointer) binfo, sizeof(bufferInfo), 0, sizeof(bufferInfo),
+        (gpointer) binfo, gst_show_vr_cb);
+    if (!buf)
+    {
+        GST_ERROR_OBJECT(sink, "new buffer fail!");
+        gst_buffer_unref(buf);
+        gst_buffer_unref(binfo->buf);
+        free(binfo);
+        return FALSE;;
+    }
+    gst_buffer_add_protection_meta(buf, s);
+    GST_BUFFER_PTS (buf) = GST_BUFFER_PTS(buffer);
+    GST_DEBUG("pts: %lld, %p", GST_BUFFER_PTS (buf),buf);
+    g_signal_emit (G_OBJECT(sink),g_signals[SIGNAL_DECODEDBUFFER],0,buf);
+    gst_buffer_unref(buf);
+    return TRUE;
+
+}
+
+
 static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffer *buffer)
 {
     GstAmlVideoSink *sink = GST_AML_VIDEO_SINK(vsink);
@@ -1067,6 +1217,37 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
     {
         GST_LOG_OBJECT(sink, "get preroll buffer 1st time, buf:%p", buffer);
         sink_priv->preroll_buffer = buffer;
+    }
+    GST_INFO_OBJECT(sink, "sink->enable_decoded_buffer_signal:%d",
+        sink->enable_decoded_buffer_signal);
+
+    if (sink->enable_decoded_buffer_signal)
+    {
+        if (!gst_aml_video_sink_check_buf(sink, buffer))
+        {
+            GST_ERROR_OBJECT(sink, "buf out of segment return");
+            goto ret;
+        }
+
+        if (!gst_aml_video_sink_show_vr_frame(sink,buffer))
+        {
+            GST_ERROR_OBJECT(sink, "can't play vr360 file!");
+            goto ret;
+        }
+        sink->queued++;
+        sink->quit_eos_detect_thread = FALSE;
+        if (sink->eos_detect_thread_handle == NULL )
+        {
+            GST_DEBUG_OBJECT(sink, "start eos detect thread");
+            sink->eos_detect_thread_handle = g_thread_new("video_sink_eos", eos_detection_thread, sink);
+        }
+        goto ret;
+    }
+
+    if (!gst_aml_video_sink_check_buf(sink, buffer))
+    {
+        GST_ERROR_OBJECT(sink, "buf out of segment return");
+        goto ret;
     }
 
     if (sink_priv->window_set.window_change)
@@ -1110,11 +1291,7 @@ static GstFlowReturn gst_aml_video_sink_show_frame(GstVideoSink *vsink, GstBuffe
         render_set_value(sink_priv->render_device_handle, KEY_PIXEL_ASPECT_RATIO, &sink->pixel_aspect_ratio);
     }
 
-    if (!gst_aml_video_sink_check_buf(sink, buffer))
-    {
-        GST_ERROR_OBJECT(sink, "buf out of segment return");
-        goto ret;
-    }
+
 
     tunnel_lib_buf_wrap = render_allocate_render_buffer_wrap(sink_priv->render_device_handle, BUFFER_FLAG_DMA_BUFFER);
     if (!tunnel_lib_buf_wrap)

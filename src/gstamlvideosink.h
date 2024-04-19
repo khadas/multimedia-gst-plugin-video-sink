@@ -74,6 +74,7 @@ struct _GstAmlVideoSink
   gboolean pixel_aspect_ratio_changed;
   double pixel_aspect_ratio;
   gboolean keep_last_frame_on_flush;
+  gboolean enable_decoded_buffer_signal;
 
   GstAmlVideoSinkPrivate *priv;
 };

@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 const char libVersion[]=
-"MM-module-name:gst-plugin-video-sink,version:1.2.13-gbcd880e";
+"MM-module-name:gst-plugin-video-sink,version:1.3.14-g39bed67";
 
 const char libFeatures[]=
 "MM-module-feature: set video full screen \n" \
